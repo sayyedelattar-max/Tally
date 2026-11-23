@@ -228,6 +228,17 @@ async fn play_channel(lib: Lib<'_>, proxy: State<'_, Proxy>, id: i64) -> std::re
 }
 
 #[tauri::command]
+async fn diagnose_channel(lib: Lib<'_>, id: i64) -> std::result::Result<String, String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
+        let ch = store.channel_by_id(id)?.ok_or_else(|| Error::Account("channel not found".into()))?;
+        Ok(tally_core::proxy::diagnose(&ch.url))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn live_favorites(lib: Lib<'_>) -> std::result::Result<Vec<ChannelDto>, String> {
     let lib = lib.inner().clone();
     blocking(move || match lib.active_store()? {
@@ -270,6 +281,7 @@ pub fn run() {
             live_channels,
             set_favorite,
             play_channel,
+            diagnose_channel,
             live_favorites,
             reorder_favorites,
             core_version

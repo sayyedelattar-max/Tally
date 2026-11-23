@@ -26,6 +26,7 @@
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@fontsource/ibm-plex-sans-arabic": "^5.3.0",
     "@tauri-apps/api": "^2.12.5",
-    "hls.js": "^1.7.4"
+    "hls.js": "^1.7.4",
+    "mpegts.js": "^1.8.2"
   }
 }

@@ -1,7 +1,7 @@
 type Dict = Record<string, string>;
 
 const en: Dict = {
-  'rp.buffering': 'Loading stream…', 'rp.error': 'This channel could not be played.', 'rp.retry': 'Try again',
+  'rp.buffering': 'Loading stream…', 'rp.error': 'This channel could not be played.', 'rp.retry': 'Try again', 'rp.details': 'Details',
   'rp.codec': 'It uses a video or audio format the built-in player cannot decode yet. A stronger player engine is planned.',
   'rp.other': 'The provider did not deliver the stream. Check that no other device is using your only connection, then try again.',
   'fav.title': 'Favorites', 'fav.empty': 'Tap the star on a channel to add it here.', 'fav.hint': 'Drag to reorder, or use the arrows. With the keyboard: Alt + ↑ / ↓.',
@@ -74,7 +74,7 @@ const en: Dict = {
 };
 
 const ar: Dict = {
-  'rp.buffering': 'جارٍ تحميل البث…', 'rp.error': 'تعذّر تشغيل هذه القناة.', 'rp.retry': 'حاول مرة أخرى',
+  'rp.buffering': 'جارٍ تحميل البث…', 'rp.error': 'تعذّر تشغيل هذه القناة.', 'rp.retry': 'حاول مرة أخرى', 'rp.details': 'التفاصيل',
   'rp.codec': 'تستخدم صيغة صورة أو صوت لا يستطيع المشغّل المدمج فكّها بعد. يجري التخطيط لمحرك تشغيل أقوى.',
   'rp.other': 'لم يرسل المزوّد البث. تأكد أن جهازًا آخر لا يستخدم اتصالك الوحيد، ثم حاول مرة أخرى.',
   'fav.title': 'المفضلة', 'fav.empty': 'اضغط على نجمة أي قناة لتضيفها هنا.', 'fav.hint': 'اسحب لإعادة الترتيب أو استخدم الأسهم. بلوحة المفاتيح: Alt + ↑ / ↓.',

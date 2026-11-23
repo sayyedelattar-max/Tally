@@ -1,5 +1,6 @@
 <script lang="ts">
   import Hls from 'hls.js';
+  import mpegts from 'mpegts.js';
   import Icon from './Icon.svelte';
   import { ui, t } from '../lib/store.svelte';
   import { api } from '../lib/backend';
@@ -15,6 +16,9 @@
   let full = $state(false);
   let idleTimer: ReturnType<typeof setTimeout>;
   let hls: Hls | null = null;
+  let ts: ReturnType<typeof mpegts.createPlayer> | null = null;
+  let report = $state('');
+  let diagBusy = $state(false);
   let ticket = 0;
 
   const rp = $derived(ui.rplay!);
@@ -23,6 +27,8 @@
   function stop() {
     hls?.destroy();
     hls = null;
+    try { ts?.destroy(); } catch {}
+    ts = null;
     if (video) {
       video.removeAttribute('src');
       video.load();
@@ -35,7 +41,25 @@
     errKind = /codec|incompatible|bufferAppend|fragParsing/i.test(detail) ? 'codec' : 'other';
   }
 
+  // Some providers answer a playlist address with a raw MPEG-TS stream; play that directly.
+  function startTs(url: string, mine: number) {
+    if (!video || !mpegts.isSupported()) return fail('manifest: not a playlist');
+    const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: true, liveBufferLatencyChasing: true });
+    p.on(mpegts.Events.ERROR, (type: string, detail: string) => { if (mine === ticket) fail(`${type}: ${detail}`); });
+    ts = p;
+    p.attachMediaElement(video);
+    p.load();
+    p.play()?.catch?.(() => {});
+  }
+
+  async function diagnose() {
+    diagBusy = true;
+    try { report = await api.diagnose(cur.id); } catch (e) { report = String(e); }
+    diagBusy = false;
+  }
+
   async function start(id: number) {
+    report = '';
     const mine = ++ticket;
     stop();
     status = 'loading';
@@ -53,6 +77,12 @@
       h.on(Hls.Events.MANIFEST_PARSED, () => video?.play().catch(() => {}));
       h.on(Hls.Events.ERROR, (_e, d) => {
         if (!d.fatal) return;
+        if (mine !== ticket) return;
+        if (d.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR || d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+          stop();
+          startTs(url, mine);
+          return;
+        }
         if (d.type === Hls.ErrorTypes.NETWORK_ERROR && retries++ < 2) h.startLoad();
         else if (d.type === Hls.ErrorTypes.MEDIA_ERROR && retries++ < 2) h.recoverMediaError();
         else fail(`${d.type}: ${d.details}`);
@@ -154,8 +184,10 @@
       <b>{t('rp.error')}</b>
       <p>{errKind === 'codec' ? t('rp.codec') : t('rp.other')}</p>
       <p class="mono muted">{errDetail}</p>
+      {#if report}<pre class="mono muted rep">{report}</pre>{/if}
       <div class="ea">
         <button class="btn primary" onclick={() => start(cur.id)}>{t('rp.retry')}</button>
+        <button class="btn" onclick={diagnose} disabled={diagBusy}>{t('rp.details')}</button>
         {#if rp.list.length > 1}<button class="btn" onclick={() => zap(1)}>{t('player.nextCh')}</button>{/if}
       </div>
     </div>
@@ -191,6 +223,7 @@
   .mid.err b { font-size: 20px; }
   .mid p { margin: 0; line-height: 1.5; }
   .mid .muted { font-size: 12px; color: rgba(255, 255, 255, 0.55); overflow-wrap: anywhere; }
+  .rep { text-align: start; white-space: pre-wrap; margin: 0; user-select: text; }
   .ea { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
   .spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

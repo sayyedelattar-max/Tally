@@ -28,6 +28,16 @@ pub struct Proxy {
     secret: Arc<str>,
 }
 
+fn stream_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .user_agent(STREAM_UA)
+        .timeout_connect(Some(Duration::from_secs(8)))
+        .timeout_recv_response(Some(Duration::from_secs(20)))
+        .build()
+        .into()
+}
+
 fn random_hex() -> String {
     let mut out = String::new();
     for i in 0..2u64 {
@@ -46,13 +56,7 @@ impl Proxy {
         let proxy = Proxy { port, secret: random_hex().into() };
         let me = proxy.clone();
         std::thread::spawn(move || {
-            let agent: ureq::Agent = ureq::Agent::config_builder()
-                .http_status_as_error(false)
-                .user_agent(STREAM_UA)
-                .timeout_connect(Some(Duration::from_secs(8)))
-                .timeout_recv_response(Some(Duration::from_secs(20)))
-                .build()
-                .into();
+            let agent = stream_agent();
             for conn in listener.incoming() {
                 let Ok(stream) = conn else { continue };
                 let (me, agent) = (me.clone(), agent.clone());
@@ -122,25 +126,34 @@ impl Proxy {
         };
         let status = resp.status().as_u16();
         let final_uri = resp.get_uri().to_string();
-        let header = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+        let hdrs: Vec<(String, String)> = resp.headers().iter().map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect();
+        let header = |n: &str| hdrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
         let ctype = header("content-type").unwrap_or_default();
-        let looks_playlist = final_uri.split('?').next().unwrap_or("").ends_with(".m3u8") || ctype.to_ascii_lowercase().contains("mpegurl");
+        let mut body = resp.into_body().into_reader();
 
-        if looks_playlist && status == 200 {
-            let mut text = String::new();
-            resp.into_body().with_config().limit(8 * 1024 * 1024).reader().read_to_string(&mut text)?;
-            if text.trim_start().starts_with("#EXTM3U") {
-                let body = match Url::parse(&final_uri) {
-                    Ok(base) => rewrite_playlist(&text, &base, |u| self.url_for(u)),
-                    Err(_) => text,
-                };
-                return reply(&mut stream, 200, "OK", &[("Content-Type", "application/vnd.apple.mpegurl")], body.as_bytes());
-            }
-            return reply(&mut stream, 200, "OK", &[("Content-Type", &ctype)], text.as_bytes());
+        // Decide by what the provider actually sends, not by the address: some panels answer a
+        // `.m3u8` request with a raw MPEG-TS stream, which must never be buffered as a "playlist".
+        let mut first = vec![0u8; 4096];
+        let got = read_some(&mut body, &mut first);
+        first.truncate(got);
+        let is_playlist = status == 200 && strip_bom(&first).trim_ascii_start().starts_with(b"#EXTM3U");
+        if is_playlist {
+            let mut rest = Vec::new();
+            body.by_ref().take(8 * 1024 * 1024).read_to_end(&mut rest)?;
+            let mut all = first;
+            all.extend_from_slice(&rest);
+            let text = String::from_utf8_lossy(&all).into_owned();
+            let out = match Url::parse(&final_uri) {
+                Ok(base) => rewrite_playlist(&text, &base, |u| self.url_for(u)),
+                Err(_) => text,
+            };
+            return reply(&mut stream, 200, "OK", &[("Content-Type", "application/vnd.apple.mpegurl")], out.as_bytes());
         }
+        let ctype = if first.first() == Some(&0x47) && !ctype.to_ascii_lowercase().starts_with("video/") { "video/mp2t".to_string() } else { ctype };
 
         let mut head = format!("HTTP/1.1 {status} {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n", if status == 206 { "Partial Content" } else if status == 200 { "OK" } else { "Upstream" });
-        for n in ["content-type", "content-length", "content-range", "accept-ranges"] {
+        head.push_str(&format!("content-type: {ctype}\r\n"));
+        for n in ["content-length", "content-range", "accept-ranges"] {
             if let Some(v) = header(n) {
                 head.push_str(&format!("{n}: {v}\r\n"));
             }
@@ -150,7 +163,9 @@ impl Proxy {
         if method == "HEAD" {
             return Ok(());
         }
-        let mut body = resp.into_body().into_reader();
+        if stream.write_all(&first).is_err() {
+            return Ok(());
+        }
         let mut buf = [0u8; 64 * 1024];
         loop {
             let n = match body.read(&mut buf) {
@@ -163,6 +178,84 @@ impl Proxy {
         }
         Ok(())
     }
+}
+
+fn read_some(r: &mut impl Read, buf: &mut [u8]) -> usize {
+    let mut n = 0;
+    while n < 16 {
+        match r.read(&mut buf[n..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    n
+}
+
+fn strip_bom(b: &[u8]) -> &[u8] {
+    b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(b)
+}
+
+/// What the provider returns for a stream address, described without revealing the address.
+/// Shown to the user so a failure can be reported precisely.
+pub fn diagnose(upstream: &str) -> String {
+    use std::time::Instant;
+    let agent = stream_agent();
+    let mut out = Vec::new();
+    let kind = |b: &[u8]| -> &'static str {
+        let t = strip_bom(b).trim_ascii_start();
+        if t.starts_with(b"#EXTM3U") { "HLS playlist" }
+        else if b.first() == Some(&0x47) { "MPEG-TS stream" }
+        else if t.starts_with(b"<") { "web page / error page" }
+        else if b.is_empty() { "nothing" }
+        else { "unknown data" }
+    };
+    let host = |u: &str| Url::parse(u).ok().and_then(|u| u.host_str().map(|h| format!("{h}{}", u.port().map(|p| format!(":{p}")).unwrap_or_default()))).unwrap_or_default();
+    let t0 = Instant::now();
+    let resp = match agent.get(upstream).call() {
+        Ok(r) => r,
+        Err(e) => return format!("request failed after {} ms: {}", t0.elapsed().as_millis(), scrub(&e.to_string(), upstream)),
+    };
+    let status = resp.status().as_u16();
+    let final_uri = resp.get_uri().to_string();
+    let ctype = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("-").to_string();
+    out.push(format!("status {status}, {} ms to answer", t0.elapsed().as_millis()));
+    out.push(format!("served by {}", host(&final_uri)));
+    out.push(format!("content-type {ctype}"));
+    let mut body = resp.into_body().into_reader();
+    let mut first = vec![0u8; 4096];
+    let t1 = Instant::now();
+    let got = read_some(&mut body, &mut first);
+    first.truncate(got);
+    out.push(format!("first data after {} ms: {} ({} bytes read)", t1.elapsed().as_millis(), kind(&first), got));
+    if kind(&first) == "HLS playlist" {
+        let mut rest = Vec::new();
+        let _ = body.by_ref().take(2 * 1024 * 1024).read_to_end(&mut rest);
+        let mut all = first;
+        all.extend_from_slice(&rest);
+        let text = String::from_utf8_lossy(&all).into_owned();
+        let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        let segs: Vec<&str> = lines.iter().copied().filter(|l| !l.starts_with('#')).collect();
+        out.push(format!("playlist: {} entries, {}", segs.len(), if text.contains("#EXT-X-ENDLIST") { "finished (not live)" } else { "live" }));
+        if lines.iter().any(|l| l.starts_with("#EXT-X-STREAM-INF")) { out.push("playlist lists several qualities".into()); }
+        if let (Some(first_seg), Ok(base)) = (segs.first(), Url::parse(&final_uri)) {
+            if let Ok(u) = base.join(first_seg) {
+                let t2 = Instant::now();
+                match agent.get(u.as_str()).call() {
+                    Ok(r) => {
+                        let st = r.status().as_u16();
+                        let ct = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("-").to_string();
+                        let mut b = r.into_body().into_reader();
+                        let mut f = vec![0u8; 4096];
+                        let n = read_some(&mut b, &mut f);
+                        f.truncate(n);
+                        out.push(format!("first entry: status {st}, {} ms, {}, {ct}, served by {}", t2.elapsed().as_millis(), kind(&f), host(u.as_str())));
+                    }
+                    Err(e) => out.push(format!("first entry failed: {}", scrub(&e.to_string(), u.as_str()))),
+                }
+            }
+        }
+    }
+    out.join("\n")
 }
 
 fn scrub(msg: &str, upstream: &str) -> String {
