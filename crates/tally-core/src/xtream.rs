@@ -16,6 +16,12 @@ use std::fmt;
 use std::io::BufReader;
 use std::time::Duration;
 
+const USER_AGENTS: [&str; 3] = [
+    "Tally/0.1",
+    "VLC/3.0.20 LibVLC/3.0.20",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+];
+
 #[derive(Clone)]
 pub struct XtreamClient {
     base: String,
@@ -23,7 +29,7 @@ pub struct XtreamClient {
     pass: String,
     /// Tried in order. IPv4 first, because many hosts publish an IPv6 address that never answers
     /// and a browser's happy-eyeballs fallback is not something plain sockets do.
-    agents: Vec<ureq::Agent>,
+    agents: Vec<(ureq::config::IpFamily, ureq::Agent)>,
 }
 
 impl fmt::Debug for XtreamClient {
@@ -49,22 +55,38 @@ pub struct AccountInfo {
     pub formats: Vec<String>,
 }
 
+/// Xtream panels send ids as numbers or as strings, depending on the panel.
+fn id_str(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 impl XtreamClient {
     pub fn new(base_url: &str, username: &str, password: &str) -> Self {
         let mut base = base_url.trim().trim_end_matches('/').to_string();
         if !base.contains("://") {
             base = format!("http://{base}");
         }
-        let make = |family: ureq::config::IpFamily| -> ureq::Agent {
+        let make = |family: ureq::config::IpFamily, ua: &str| -> ureq::Agent {
             ureq::Agent::config_builder()
                 .ip_family(family)
-                .user_agent("Tally/0.1")
+                .user_agent(ua)
                 .timeout_connect(Some(Duration::from_secs(8)))
                 .timeout_recv_response(Some(Duration::from_secs(30)))
                 .build()
                 .into()
         };
-        let agents = vec![make(ureq::config::IpFamily::Ipv4Only), make(ureq::config::IpFamily::Any)];
+        // Outer: IPv4 first (many hosts publish an IPv6 address that never answers). Inner: some
+        // providers answer 403/404 to clients they do not recognise, so retry with player-style names.
+        let mut agents = Vec::new();
+        for family in [ureq::config::IpFamily::Ipv4Only, ureq::config::IpFamily::Any] {
+            for ua in USER_AGENTS {
+                agents.push((family, make(family, ua)));
+            }
+        }
         Self { base, user: username.to_string(), pass: password.to_string(), agents }
     }
 
@@ -93,13 +115,32 @@ impl XtreamClient {
 
     fn get(&self, url: &str) -> Result<ureq::Body> {
         let mut last = String::new();
-        for agent in &self.agents {
+        let mut status: Option<u16> = None;
+        let mut skip_family = None;
+        for (family, agent) in &self.agents {
+            if skip_family == Some(*family) {
+                continue;
+            }
             match agent.get(url).call() {
                 Ok(resp) => return Ok(resp.into_body()),
-                // The server answered (wrong login, 404...): another network path will not change that.
-                Err(e @ ureq::Error::StatusCode(_)) => return Err(Error::Http(self.scrub(&e.to_string()))),
-                Err(e) => last = self.scrub(&e.to_string()),
+                Err(ureq::Error::StatusCode(code)) => {
+                    // 403/404 may mean "unknown client": try the next name. Anything else is final.
+                    if code != 403 && code != 404 {
+                        return Err(Error::Http(format!("http status: {code}")));
+                    }
+                    status = Some(code);
+                }
+                Err(e) => {
+                    // Could not connect at all: other names will not help on this address family.
+                    last = self.scrub(&e.to_string());
+                    skip_family = Some(*family);
+                }
             }
+        }
+        if let Some(code) = status {
+            return Err(Error::Http(format!(
+                "http status: {code}. The server answered but has no Xtream API at this address. Check the address (no /c or /get.php) and the port."
+            )));
         }
         Err(Error::Http(format!(
             "could not reach the server ({last}). Check the address, and that this computer can open it."
@@ -118,13 +159,62 @@ impl XtreamClient {
     }
 
     /// Stream the live playlist into `sink`. Returns how many channels arrived.
-    pub fn playlist(&self, sink: impl FnMut(Channel)) -> Result<usize> {
+    pub fn playlist(&self, mut sink: impl FnMut(Channel)) -> Result<usize> {
+        // The JSON API is on every panel; `get.php` is often switched off (404).
+        match self.playlist_json(&mut sink) {
+            Ok(n) if n > 0 => Ok(n),
+            Ok(_) | Err(_) => self.playlist_m3u(sink),
+        }
+    }
+
+    fn json(&self, action: &str) -> Result<Value> {
+        let mut body = self.get(&self.url("player_api.php", &format!("&action={action}")))?;
+        let text = body
+            .read_to_string()
+            .map_err(|e| Error::Http(self.scrub(&e.to_string())))?;
+        serde_json::from_str(&text).map_err(|_| Error::Account(format!("unexpected reply to {action}")))
+    }
+
+    fn playlist_json(&self, sink: &mut impl FnMut(Channel)) -> Result<usize> {
+        let mut names = std::collections::HashMap::new();
+        if let Ok(Value::Array(cats)) = self.json("get_live_categories") {
+            for c in cats {
+                if let (Some(id), Some(name)) = (id_str(&c["category_id"]), c["category_name"].as_str()) {
+                    names.insert(id, name.to_string());
+                }
+            }
+        }
+        let streams = match self.json("get_live_streams")? {
+            Value::Array(a) => a,
+            _ => return Ok(0),
+        };
+        // HLS first when the plan allows it, because that is what most providers serve reliably.
+        let ext = match self.account().map(|a| a.formats) {
+            Ok(f) if f.iter().any(|x| x == "m3u8") => "m3u8",
+            _ => "ts",
+        };
+        let mut n = 0;
+        for (i, s) in streams.iter().enumerate() {
+            let (Some(id), Some(name)) = (id_str(&s["stream_id"]), s["name"].as_str()) else { continue };
+            sink(Channel {
+                tvg_id: s["epg_channel_id"].as_str().unwrap_or("").to_string(),
+                name: name.trim().to_string(),
+                group: id_str(&s["category_id"]).and_then(|c| names.get(&c).cloned()).unwrap_or_default(),
+                logo: s["stream_icon"].as_str().unwrap_or("").to_string(),
+                url: format!("{}/live/{}/{}/{}.{}", self.base, encode(&self.user), encode(&self.pass), id, ext),
+                number: id_str(&s["num"]).and_then(|x| x.parse().ok()).or(Some(i as u32 + 1)),
+            });
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    fn playlist_m3u(&self, sink: impl FnMut(Channel)) -> Result<usize> {
         let mut body = self.get(&self.url("get.php", "&type=m3u_plus&output=ts"))?;
         let reader = BufReader::new(body.with_config().limit(u64::MAX).reader());
         parse_m3u(reader, sink).map_err(|e| Error::Http(self.scrub(&e.to_string())))
     }
 
-    /// Stream the XMLTV guide into `sink`. Returns how many programmes arrived.
     pub fn guide(&self, sink: impl FnMut(Programme)) -> Result<usize> {
         let mut body = self.get(&self.url("xmltv.php", ""))?;
         let reader = BufReader::new(body.with_config().limit(u64::MAX).reader());
@@ -186,6 +276,10 @@ mod tests {
 
     /// Minimal one-shot HTTP server for tests: answers `n` requests, routing on the path.
     fn serve(n: usize, wrong_login: bool) -> String {
+        serve_with(n, wrong_login, true)
+    }
+
+    fn serve_with(n: usize, wrong_login: bool, json_lists: bool) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -195,7 +289,14 @@ mod tests {
                 let len = s.read(&mut buf).unwrap();
                 let req = String::from_utf8_lossy(&buf[..len]).to_string();
                 let line = req.lines().next().unwrap_or("").to_string();
-                let body = if line.contains("player_api.php") {
+                let body = if json_lists && line.contains("action=get_live_categories") {
+                    r#"[{"category_id":"7","category_name":"News"},{"category_id":8,"category_name":"أخبار"}]"#.to_string()
+                } else if json_lists && line.contains("action=get_live_streams") {
+                    r#"[{"num":1,"name":"Harbor News 24","stream_id":101,"epg_channel_id":"hn","category_id":"7","stream_icon":""},
+                        {"num":"2","name":"المرفأ نيوز","stream_id":"102","epg_channel_id":null,"category_id":8}]"#.to_string()
+                } else if !json_lists && line.contains("action=") {
+                    "<html>not found</html>".to_string()
+                } else if line.contains("player_api.php") {
                     if wrong_login || !line.contains("password=p%40ss") {
                         r#"{"user_info":{"auth":0}}"#.to_string()
                     } else {
@@ -228,7 +329,7 @@ mod tests {
 
     #[test]
     fn account_playlist_and_guide_round_trip() {
-        let host = serve(3, false);
+        let host = serve(5, false);
         // the password has a character that must be percent-encoded
         let c = XtreamClient::new(&host, "u", "p@ss");
 
@@ -242,10 +343,25 @@ mod tests {
         let mut chans = Vec::new();
         assert_eq!(c.playlist(|ch| chans.push(ch)).unwrap(), 2);
         assert_eq!(chans[1].name, "المرفأ نيوز");
+        assert_eq!(chans[0].group, "News");
+        assert_eq!(chans[1].group, "أخبار");
+        assert_eq!(chans[0].number, Some(1));
+        // HLS is allowed on this plan, and the password is encoded in the stream address
+        assert!(chans[0].url.ends_with("/live/u/p%40ss/101.m3u8"), "{}", chans[0].url);
 
         let mut progs = Vec::new();
         assert_eq!(c.guide(|p| progs.push(p)).unwrap(), 1);
         assert_eq!(progs[0].title, "Evening Bulletin");
+    }
+
+    #[test]
+    fn falls_back_to_m3u_when_json_lists_are_missing() {
+        // get_live_categories, get_live_streams, then get.php
+        let host = serve_with(3, false, false);
+        let c = XtreamClient::new(&host, "u", "p@ss");
+        let mut chans = Vec::new();
+        assert_eq!(c.playlist(|ch| chans.push(ch)).unwrap(), 2);
+        assert_eq!(chans[0].name, "Harbor News 24");
     }
 
     #[test]
