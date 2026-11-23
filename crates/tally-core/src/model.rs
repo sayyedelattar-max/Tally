@@ -1,6 +1,9 @@
 /// A channel as it appears in a playlist.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Channel {
+    /// Stable identity from the provider (e.g. `x:101`), so favorites survive when addresses change.
+    /// Empty means "derive one from the guide id or the address".
+    pub key: String,
     pub tvg_id: String,
     pub name: String,
     pub group: String,

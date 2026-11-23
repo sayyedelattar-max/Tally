@@ -12,6 +12,7 @@ pub mod library;
 pub mod m3u;
 pub mod model;
 pub mod norm;
+pub mod proxy;
 pub mod store;
 pub mod xmltv;
 pub mod xtream;

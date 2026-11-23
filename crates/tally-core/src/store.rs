@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS channels(
   url TEXT NOT NULL,
   number INTEGER,
   fav INTEGER NOT NULL DEFAULT 0,
+  fav_pos INTEGER NOT NULL DEFAULT 0,
   gen INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS channels_number ON channels(number, id);
@@ -128,6 +129,13 @@ impl Store {
              PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456;",
         )?;
         conn.execute_batch(SCHEMA)?;
+        // databases made by earlier versions
+        let has_pos = conn
+            .prepare("SELECT 1 FROM pragma_table_info('channels') WHERE name = 'fav_pos'")?
+            .exists([])?;
+        if !has_pos {
+            conn.execute_batch("ALTER TABLE channels ADD COLUMN fav_pos INTEGER NOT NULL DEFAULT 0;")?;
+        }
         Ok(Self { conn })
     }
 
@@ -152,7 +160,9 @@ impl Store {
             )?;
             for ch in items {
                 n += 1;
-                let key = if ch.tvg_id.is_empty() {
+                let key = if !ch.key.is_empty() {
+                    ch.key.clone()
+                } else if ch.tvg_id.is_empty() {
                     ch.url.clone()
                 } else {
                     format!("{}|{}", ch.tvg_id, ch.name)
@@ -277,13 +287,40 @@ impl Store {
     }
 
     pub fn set_favorite(&self, id: i64, fav: bool) -> Result<()> {
-        self.conn
-            .execute("UPDATE channels SET fav = ?2 WHERE id = ?1", params![id, fav as i64])?;
+        if fav {
+            // new favourites go to the end of the user's order
+            self.conn.execute(
+                "UPDATE channels SET fav = 1, fav_pos = (SELECT COALESCE(MAX(fav_pos), 0) + 1 FROM channels)
+                 WHERE id = ?1 AND fav = 0",
+                [id],
+            )?;
+        } else {
+            self.conn.execute("UPDATE channels SET fav = 0, fav_pos = 0 WHERE id = ?1", [id])?;
+        }
+        Ok(())
+    }
+
+    /// Store the user's own order of favourites: `ids` from first to last.
+    /// Favourites missing from `ids` keep their relative order after the listed ones.
+    pub fn reorder_favorites(&mut self, ids: &[i64]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut up = tx.prepare("UPDATE channels SET fav_pos = ?2 WHERE id = ?1 AND fav = 1")?;
+            for (i, id) in ids.iter().enumerate() {
+                up.execute(params![id, (i + 1) as i64])?;
+            }
+            // anything not listed goes after, in its previous order
+            tx.execute(
+                "UPDATE channels SET fav_pos = fav_pos + ?1 WHERE fav = 1 AND id NOT IN (SELECT value FROM json_each(?2))",
+                params![ids.len() as i64, serde_json::to_string(ids).unwrap_or_else(|_| "[]".into())],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
     pub fn favorites(&self) -> Result<Vec<ChannelRow>> {
-        let sql = format!("SELECT {CH_COLS} FROM channels WHERE fav = 1 ORDER BY number, id");
+        let sql = format!("SELECT {CH_COLS} FROM channels WHERE fav = 1 ORDER BY fav_pos, number, id");
         let mut st = self.conn.prepare_cached(&sql)?;
         let rows = st.query_map([], channel_row)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -511,6 +548,36 @@ mod tests {
         ])
         .unwrap();
         s
+    }
+
+    #[test]
+    fn favourites_keep_the_users_order() {
+        let mut s = Store::open_memory().unwrap();
+        let g = |name: &str, n: u32| Channel { key: format!("x:{n}"), name: name.into(), number: Some(n), url: format!("http://s/{n}.m3u8"), ..Default::default() };
+        s.import_channels(vec![g("A", 1), g("B", 2), g("C", 3), g("D", 4)]).unwrap();
+        let id = |n: i64| s.channel_by_number(n).unwrap().unwrap().id;
+        let (a, b, c, d) = (id(1), id(2), id(3), id(4));
+        for x in [c, a, b] {
+            s.set_favorite(x, true).unwrap();
+        }
+        let names = |s: &Store| s.favorites().unwrap().iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&s), ["C", "A", "B"], "order of adding, not channel number");
+        s.reorder_favorites(&[b, c, a]).unwrap();
+        assert_eq!(names(&s), ["B", "C", "A"]);
+        // a partial list keeps the rest after it
+        s.reorder_favorites(&[a]).unwrap();
+        assert_eq!(names(&s), ["A", "B", "C"]);
+        s.set_favorite(d, true).unwrap();
+        assert_eq!(names(&s).last().map(String::as_str), Some("D"));
+        // the address changes (ts -> m3u8) but the key stays: favourites and their order survive
+        s.import_channels(vec![
+            Channel { url: "http://s/1.ts".into(), ..g("A", 1) },
+            g("B", 2), g("C", 3), g("D", 4),
+        ])
+        .unwrap();
+        assert_eq!(names(&s), ["A", "B", "C", "D"]);
+        s.set_favorite(b, false).unwrap();
+        assert_eq!(names(&s), ["A", "C", "D"]);
     }
 
     #[test]

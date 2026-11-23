@@ -3,6 +3,7 @@
   import TopBar from './components/TopBar.svelte';
   import Player from './components/Player.svelte';
   import Search from './components/Search.svelte';
+  import RealPlayer from './components/RealPlayer.svelte';
   import Home from './views/Home.svelte';
   import Live from './views/Live.svelte';
   import Browse from './views/Browse.svelte';
@@ -42,12 +43,12 @@
       if (!ui.searchOpen) openSearch();
       return;
     }
-    if (k === '/' && !typing(e) && !ui.searchOpen && !ui.playing) {
+    if (k === '/' && !typing(e) && !ui.searchOpen && !ui.playing && !ui.rplay) {
       e.preventDefault();
       openSearch();
       return;
     }
-    if (ui.playing || typing(e) || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (ui.playing || ui.rplay || typing(e) || e.altKey || e.ctrlKey || e.metaKey) return;
     const dirs: Record<string, 'left' | 'right' | 'up' | 'down'> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
     if (dirs[k] && move(dirs[k])) e.preventDefault();
   }
@@ -73,6 +74,7 @@
 
 {#if ui.searchOpen}<Search />{/if}
 {#if ui.playing}<Player />{/if}
+{#if ui.rplay}<RealPlayer />{/if}
 {#if ui.toast}<div class="toast" role="status">{ui.toast}</div>{/if}
 
 <style>

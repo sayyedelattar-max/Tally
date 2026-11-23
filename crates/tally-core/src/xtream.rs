@@ -197,6 +197,7 @@ impl XtreamClient {
         for (i, s) in streams.iter().enumerate() {
             let (Some(id), Some(name)) = (id_str(&s["stream_id"]), s["name"].as_str()) else { continue };
             sink(Channel {
+                key: format!("x:{id}"),
                 tvg_id: s["epg_channel_id"].as_str().unwrap_or("").to_string(),
                 name: name.trim().to_string(),
                 group: id_str(&s["category_id"]).and_then(|c| names.get(&c).cloned()).unwrap_or_default(),

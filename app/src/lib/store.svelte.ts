@@ -1,10 +1,12 @@
 import type { Accent, Channel, Lang, Playing, Prog, Title, View } from './types';
 import { dict } from './i18n';
 
-import { api, inApp, type PlaylistInfo } from './backend';
+import { api, inApp, type Chan, type PlaylistInfo } from './backend';
 
 /** All UI state in one place. Mutate fields directly; components react to what they read. */
 export const ui = $state({
+  /** The channel being watched in the app, and the list it was picked from (for zapping). */
+  rplay: null as null | { list: Chan[]; index: number },
   real: { loaded: false, active: null as string | null, items: [] as PlaylistInfo[] },
   view: 'home' as View,
   lang: 'en' as Lang,

@@ -33,6 +33,9 @@ export const api = {
   activate: (id: string) => call<void>('playlist_activate', { id }),
   groups: () => call<Group[]>('live_groups'),
   channels: (a: { group: string | null; query: string | null; after: [number, number] | null; limit: number }) => call<ChanPage>('live_channels', a),
+  play: (id: number) => call<{ url: string }>('play_channel', { id }),
+  favorites: () => call<Chan[]>('live_favorites'),
+  reorder: (ids: number[]) => call<void>('reorder_favorites', { ids }),
   setFavorite: (id: number, fav: boolean) => call<void>('set_favorite', { id, fav }),
 };
 

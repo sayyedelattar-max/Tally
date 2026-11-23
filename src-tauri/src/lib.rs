@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::sync::Arc;
 use tally_core::library::{Library, PlaylistMeta, Secrets};
+use tally_core::proxy::Proxy;
 use tally_core::store::ChannelRow;
 use tally_core::{Error, Result};
 use tauri::{Manager, State};
@@ -209,6 +210,43 @@ async fn set_favorite(lib: Lib<'_>, id: i64, fav: bool) -> std::result::Result<(
     .await
 }
 
+#[derive(Serialize)]
+struct PlayDto {
+    /// A local address served by the app's own proxy. The provider's address and password never leave Rust.
+    url: String,
+}
+
+#[tauri::command]
+async fn play_channel(lib: Lib<'_>, proxy: State<'_, Proxy>, id: i64) -> std::result::Result<PlayDto, String> {
+    let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
+    blocking(move || {
+        let store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
+        let ch = store.channel_by_id(id)?.ok_or_else(|| Error::Account("channel not found".into()))?;
+        Ok(PlayDto { url: proxy.url_for(&ch.url) })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn live_favorites(lib: Lib<'_>) -> std::result::Result<Vec<ChannelDto>, String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(s) => Ok(s.favorites()?.into_iter().map(Into::into).collect()),
+        None => Ok(Vec::new()),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reorder_favorites(lib: Lib<'_>, ids: Vec<i64>) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(mut s) => s.reorder_favorites(&ids),
+        None => Ok(()),
+    })
+    .await
+}
+
 #[tauri::command]
 fn core_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -219,6 +257,7 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             app.manage(Arc::new(Library::new(dir, Box::new(Keychain))));
+            app.manage(Proxy::start().map_err(|e| e.to_string())?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -230,6 +269,9 @@ pub fn run() {
             live_groups,
             live_channels,
             set_favorite,
+            play_channel,
+            live_favorites,
+            reorder_favorites,
             core_version
         ])
         .run(tauri::generate_context!())
