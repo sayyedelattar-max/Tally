@@ -21,7 +21,9 @@ pub struct XtreamClient {
     base: String,
     user: String,
     pass: String,
-    agent: ureq::Agent,
+    /// Tried in order. IPv4 first, because many hosts publish an IPv6 address that never answers
+    /// and a browser's happy-eyeballs fallback is not something plain sockets do.
+    agents: Vec<ureq::Agent>,
 }
 
 impl fmt::Debug for XtreamClient {
@@ -53,12 +55,17 @@ impl XtreamClient {
         if !base.contains("://") {
             base = format!("http://{base}");
         }
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .timeout_recv_response(Some(Duration::from_secs(30)))
-            .build()
-            .into();
-        Self { base, user: username.to_string(), pass: password.to_string(), agent }
+        let make = |family: ureq::config::IpFamily| -> ureq::Agent {
+            ureq::Agent::config_builder()
+                .ip_family(family)
+                .user_agent("Tally/0.1")
+                .timeout_connect(Some(Duration::from_secs(8)))
+                .timeout_recv_response(Some(Duration::from_secs(30)))
+                .build()
+                .into()
+        };
+        let agents = vec![make(ureq::config::IpFamily::Ipv4Only), make(ureq::config::IpFamily::Any)];
+        Self { base, user: username.to_string(), pass: password.to_string(), agents }
     }
 
     fn url(&self, path: &str, extra: &str) -> String {
@@ -85,10 +92,18 @@ impl XtreamClient {
     }
 
     fn get(&self, url: &str) -> Result<ureq::Body> {
-        match self.agent.get(url).call() {
-            Ok(resp) => Ok(resp.into_body()),
-            Err(e) => Err(Error::Http(self.scrub(&e.to_string()))),
+        let mut last = String::new();
+        for agent in &self.agents {
+            match agent.get(url).call() {
+                Ok(resp) => return Ok(resp.into_body()),
+                // The server answered (wrong login, 404...): another network path will not change that.
+                Err(e @ ureq::Error::StatusCode(_)) => return Err(Error::Http(self.scrub(&e.to_string()))),
+                Err(e) => last = self.scrub(&e.to_string()),
+            }
         }
+        Err(Error::Http(format!(
+            "could not reach the server ({last}). Check the address, and that this computer can open it."
+        )))
     }
 
     /// Log in and read subscription details. Fails if the provider rejects the login.
