@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/tally-core"]
+members = ["crates/tally-core", "src-tauri"]
+default-members = ["crates/tally-core"]
 
 [profile.release]
 lto = "thin"

@@ -5,6 +5,37 @@
 
   let adding = $state(false);
   let kind = $state<'xtream' | 'm3u'>('xtream');
+  let name = $state('');
+  let host = $state('');
+  let user = $state('');
+  let pass = $state('');
+  let busy = $state(false);
+  let error = $state('');
+
+  type Connected = { status: string; expiresAt: number | null; trial: boolean; maxConnections: number | null; activeConnections: number | null; channels: number };
+  const inApp = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+  async function save(e: Event) {
+    e.preventDefault();
+    if (!inApp || kind !== 'xtream') {
+      adding = false;
+      toast(t('toast.plNote'));
+      return;
+    }
+    busy = true;
+    error = '';
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const r = await invoke<Connected>('connect_xtream', { host: host.trim(), user: user.trim(), pass });
+      toast(`${t('pl.connected')} · ${r.channels} ${t('nav.live')}`);
+      adding = false;
+      pass = '';
+    } catch (err) {
+      error = String(err);
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
 <div class="head">
@@ -13,21 +44,22 @@
 </div>
 
 {#if adding}
-  <form class="add" onsubmit={(e) => { e.preventDefault(); adding = false; toast(t('toast.plNote')); }}>
+  <form class="add" onsubmit={save}>
     <div class="seg" role="group" aria-label={t('pl.type')}>
       <button type="button" class:on={kind === 'xtream'} onclick={() => (kind = 'xtream')}>Xtream Codes</button>
       <button type="button" class:on={kind === 'm3u'} onclick={() => (kind = 'm3u')}>M3U / URL</button>
     </div>
-    <label class="f"><span>{t('pl.name')}</span><input class="inp" placeholder="Home subscription" /></label>
-    <label class="f"><span>{kind === 'xtream' ? t('pl.server') : t('pl.url')}</span><input class="inp ltr-in" dir="ltr" placeholder={kind === 'xtream' ? 'https://provider.example' : 'https://example.com/list.m3u'} /></label>
+    <label class="f"><span>{t('pl.name')}</span><input class="inp" bind:value={name} placeholder="Home subscription" /></label>
+    <label class="f"><span>{kind === 'xtream' ? t('pl.server') : t('pl.url')}</span><input class="inp ltr-in" dir="ltr" bind:value={host} placeholder={kind === 'xtream' ? 'https://provider.example' : 'https://example.com/list.m3u'} /></label>
     {#if kind === 'xtream'}
       <div class="two">
-        <label class="f"><span>{t('pl.user')}</span><input class="inp ltr-in" dir="ltr" autocomplete="off" /></label>
-        <label class="f"><span>{t('pl.pass')}</span><input class="inp ltr-in" dir="ltr" type="password" autocomplete="off" /></label>
+        <label class="f"><span>{t('pl.user')}</span><input class="inp ltr-in" dir="ltr" bind:value={user} autocomplete="off" /></label>
+        <label class="f"><span>{t('pl.pass')}</span><input class="inp ltr-in" dir="ltr" type="password" bind:value={pass} autocomplete="off" /></label>
       </div>
     {/if}
     <p class="muted note"><Icon name="lock" size={14} /> {t('pl.secure')}</p>
-    <div><button class="btn primary" type="submit">{t('pl.save')}</button></div>
+    {#if error}<p class="err" role="alert">{error}</p>{/if}
+    <div><button class="btn primary" type="submit" disabled={busy}>{busy ? t('pl.connecting') : t('pl.save')}</button></div>
   </form>
 {/if}
 
@@ -114,6 +146,12 @@
   .inp:focus-visible {
     outline: none;
     border-color: var(--accent);
+  }
+  .err {
+    margin: 0;
+    color: var(--live);
+    font-size: 14px;
+    overflow-wrap: anywhere;
   }
   .note {
     display: flex;

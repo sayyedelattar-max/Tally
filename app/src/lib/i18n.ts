@@ -1,6 +1,7 @@
 type Dict = Record<string, string>;
 
 const en: Dict = {
+  'pl.connecting': 'Connecting…', 'pl.connected': 'Connected',
   'home.greet.morning': 'Good morning', 'home.greet.afternoon': 'Good afternoon', 'home.greet.evening': 'Good evening', 'home.greet.night': 'Late night',
   'home.lead': 'Pick up where you left off, or see what is on your channels.', 'home.resume': 'Where you left off', 'home.resumeBtn': 'Resume', 'home.browse': 'Browse',
   'home.timeline': 'On your channels', 'home.now': 'Now', 'home.fitTitle': 'I have time for', 'home.fit30': '30 min', 'home.fit60': '1 hour', 'home.fit120': '2 hours', 'home.fitAny': 'All night',
@@ -60,6 +61,7 @@ const en: Dict = {
 };
 
 const ar: Dict = {
+  'pl.connecting': 'جارٍ الاتصال…', 'pl.connected': 'تم الاتصال',
   'home.greet.morning': 'صباح الخير', 'home.greet.afternoon': 'مساء الخير', 'home.greet.evening': 'مساء الخير', 'home.greet.night': 'سهرة متأخرة',
   'home.lead': 'أكمل من حيث توقفت، أو شاهد ما يُعرض على قنواتك.', 'home.resume': 'حيث توقفت', 'home.resumeBtn': 'أكمل', 'home.browse': 'تصفح',
   'home.timeline': 'على قنواتك', 'home.now': 'الآن', 'home.fitTitle': 'عندي وقت لـ', 'home.fit30': '٣٠ دقيقة', 'home.fit60': 'ساعة', 'home.fit120': 'ساعتين', 'home.fitAny': 'السهرة كلها',

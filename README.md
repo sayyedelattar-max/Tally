@@ -50,3 +50,11 @@ In the app they will be kept in the Windows Credential Manager. Errors scrub the
 ## Design
 
 Graphite background, paper-white text, one accent (changeable), flat procedural poster art with no gradients, condensed display type, IBM Plex Sans / Plex Sans Arabic. Everything is reachable by arrow keys, so it works with a mouse, keyboard or TV-style remote.
+
+## Desktop build
+
+The Windows installer is built by CI (`windows` job) and uploaded as the `tally-windows` artifact on every push to a branch. Download it from the Actions tab, no local Rust toolchain needed.
+
+Local: `cd app && npm install`, then from the repo root `npm exec --prefix app -- tauri build`.
+
+Next: libmpv playback (transparent window with mpv rendering behind the UI), keychain storage for credentials, guide import.
