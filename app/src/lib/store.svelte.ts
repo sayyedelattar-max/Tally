@@ -1,8 +1,11 @@
 import type { Accent, Channel, Lang, Playing, Prog, Title, View } from './types';
 import { dict } from './i18n';
 
+import { api, inApp, type PlaylistInfo } from './backend';
+
 /** All UI state in one place. Mutate fields directly; components react to what they read. */
 export const ui = $state({
+  real: { loaded: false, active: null as string | null, items: [] as PlaylistInfo[] },
   view: 'home' as View,
   lang: 'en' as Lang,
   accent: 'mono' as Accent,
@@ -93,3 +96,17 @@ export function closeSearch() {
   ui.searchOpen = false;
   queueMicrotask(() => lastFocus?.focus?.());
 }
+
+/** Reads the saved playlists from the app. Call again after any change. */
+export async function loadRegistry() {
+  if (!inApp) return;
+  try {
+    const r = await api.playlists();
+    ui.real.active = r.active;
+    ui.real.items = r.items;
+  } finally {
+    ui.real.loaded = true;
+  }
+}
+
+export const realActive = () => ui.real.items.find((p) => p.id === ui.real.active) ?? null;

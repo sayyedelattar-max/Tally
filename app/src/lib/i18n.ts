@@ -1,6 +1,14 @@
 type Dict = Record<string, string>;
 
 const en: Dict = {
+  'real.noPlaylist': 'No playlist yet', 'real.noPlaylistLead': 'Add your provider to see your channels here.',
+  'real.sample': 'Sample content. Movies, series, replay and the guide will load from your provider in an upcoming update. Your real channels are under Live TV.',
+  'real.playSoon': 'Playback arrives in the next update', 'real.channels': 'channels', 'real.searchCh': 'Search your channels',
+  'real.groups': 'Groups', 'real.loadMore': 'Load more', 'real.noMatch': 'No channels match', 'real.openLive': 'Open Live TV',
+  'pl.edit': 'Edit', 'pl.confirmRemove': 'Tap again to remove', 'pl.refreshing': 'Refreshing…', 'pl.keepPass': 'Unchanged',
+  'pl.saveChanges': 'Save changes', 'pl.editTitle': 'Edit playlist', 'pl.empty': 'No playlists yet', 'pl.removed': 'Playlist removed',
+  'pl.saved': 'Playlist saved', 'pl.manage': 'Manage playlists', 'pl.none': 'No playlist',
+  'set.connection': 'Connection', 'set.refreshDesc': 'Download the channel list again from your provider',
   'pl.connecting': 'Connecting…', 'pl.connected': 'Connected',
   'home.greet.morning': 'Good morning', 'home.greet.afternoon': 'Good afternoon', 'home.greet.evening': 'Good evening', 'home.greet.night': 'Late night',
   'home.lead': 'Pick up where you left off, or see what is on your channels.', 'home.resume': 'Where you left off', 'home.resumeBtn': 'Resume', 'home.browse': 'Browse',
@@ -61,6 +69,14 @@ const en: Dict = {
 };
 
 const ar: Dict = {
+  'real.noPlaylist': 'لا توجد قائمة بعد', 'real.noPlaylistLead': 'أضف مزوّد الخدمة لتظهر قنواتك هنا.',
+  'real.sample': 'محتوى تجريبي. الأفلام والمسلسلات والإعادة والدليل ستُحمَّل من مزوّدك في تحديث قادم. قنواتك الحقيقية في قسم البث المباشر.',
+  'real.playSoon': 'التشغيل يصل في التحديث القادم', 'real.channels': 'قناة', 'real.searchCh': 'ابحث في قنواتك',
+  'real.groups': 'المجموعات', 'real.loadMore': 'عرض المزيد', 'real.noMatch': 'لا توجد قنوات مطابقة', 'real.openLive': 'افتح البث المباشر',
+  'pl.edit': 'تعديل', 'pl.confirmRemove': 'اضغط مرة أخرى للحذف', 'pl.refreshing': 'جارٍ التحديث…', 'pl.keepPass': 'بدون تغيير',
+  'pl.saveChanges': 'حفظ التعديلات', 'pl.editTitle': 'تعديل القائمة', 'pl.empty': 'لا توجد قوائم بعد', 'pl.removed': 'تم حذف القائمة',
+  'pl.saved': 'تم حفظ القائمة', 'pl.manage': 'إدارة القوائم', 'pl.none': 'لا توجد قائمة',
+  'set.connection': 'الاتصال', 'set.refreshDesc': 'تحميل قائمة القنوات من مزوّدك مرة أخرى',
   'pl.connecting': 'جارٍ الاتصال…', 'pl.connected': 'تم الاتصال',
   'home.greet.morning': 'صباح الخير', 'home.greet.afternoon': 'مساء الخير', 'home.greet.evening': 'مساء الخير', 'home.greet.night': 'سهرة متأخرة',
   'home.lead': 'أكمل من حيث توقفت، أو شاهد ما يُعرض على قنواتك.', 'home.resume': 'حيث توقفت', 'home.resumeBtn': 'أكمل', 'home.browse': 'تصفح',

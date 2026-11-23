@@ -1,12 +1,33 @@
 <script lang="ts">
   import Icon from '../components/Icon.svelte';
   import SettingRow from '../components/SettingRow.svelte';
-  import { ui, t, toast } from '../lib/store.svelte';
+  import PlaylistForm from '../components/PlaylistForm.svelte';
+  import { ui, t, toast, go, realActive, loadRegistry } from '../lib/store.svelte';
+  import { api, inApp, expiry } from '../lib/backend';
   import { liveCategories, movieCategories, playlists, seriesCategories, daysLeft } from '../lib/mock';
   import type { Accent } from '../lib/types';
 
   const pl = $derived(playlists.find((p) => p.id === ui.activePlaylist)!);
   const left = $derived(daysLeft(pl.expires));
+  const real = $derived(inApp ? realActive() : null);
+  const rex = $derived(real ? expiry(real.expiresAt) : null);
+  let editing = $state(false);
+  let refreshing = $state(false);
+  let refreshError = $state('');
+  async function refreshReal() {
+    if (!real) return;
+    refreshing = true;
+    refreshError = '';
+    try {
+      await api.refresh(real.id);
+      await loadRegistry();
+      toast(t('toast.refreshed'));
+    } catch (e) {
+      refreshError = String(e);
+    } finally {
+      refreshing = false;
+    }
+  }
   let hideTab = $state<'live' | 'movies' | 'series'>('live');
 
   const cats = $derived(hideTab === 'live' ? liveCategories : hideTab === 'movies' ? movieCategories : seriesCategories);
@@ -28,6 +49,34 @@
 </script>
 
 <div class="wrap">
+  {#if inApp}
+    <section>
+      <h2 class="display">{t('set.connection')}</h2>
+      {#if editing && real}
+        {#key real.id}<PlaylistForm editing={real} ondone={() => (editing = false)} oncancel={() => (editing = false)} />{/key}
+      {:else if real}
+        <SettingRow label={real.name} desc={`Xtream Codes · ${real.host.replace(/^https?:\/\//, '')} · ${real.user}`}>
+          <span class="pill">{real.status}</span>
+          {#if rex}<span class="mono muted">{t('top.expires')} {rex.date} · {rex.days} {t('top.days')}</span>{/if}
+        </SettingRow>
+        {#if real.maxConnections}
+          <SettingRow label={t('set.connections')} desc={t('set.connectionsDesc')}>
+            <span class="mono">{real.activeConnections ?? 0} / {real.maxConnections}</span>
+          </SettingRow>
+        {/if}
+        <SettingRow label={`${real.channels} ${t('real.channels')}`} desc={t('set.refreshDesc')}>
+          <button class="btn" disabled={refreshing} onclick={refreshReal}><Icon name="refresh" size={16} /> {refreshing ? t('pl.refreshing') : t('pl.refresh')}</button>
+          <button class="btn" onclick={() => (editing = true)}><Icon name="sliders" size={16} /> {t('pl.edit')}</button>
+          <button class="btn" onclick={() => go('playlists')}>{t('pl.manage')}</button>
+        </SettingRow>
+        {#if refreshError}<p class="err" role="alert">{refreshError}</p>{/if}
+      {:else}
+        <SettingRow label={t('real.noPlaylist')} desc={t('real.noPlaylistLead')}>
+          <button class="btn primary" onclick={() => go('playlists')}><Icon name="plus" size={16} /> {t('pl.add')}</button>
+        </SettingRow>
+      {/if}
+    </section>
+  {:else}
   <section>
     <h2 class="display">{t('set.account')}</h2>
     <SettingRow label={pl.name} desc={`${pl.type === 'xtream' ? 'Xtream Codes' : 'M3U'} · ${pl.host}`}>
@@ -40,6 +89,7 @@
       </SettingRow>
     {/if}
   </section>
+  {/if}
 
   <section>
     <h2 class="display">{t('set.playback')}</h2>
@@ -146,6 +196,7 @@
     letter-spacing: 0.03em;
     color: var(--muted);
   }
+  .err { color: var(--live); overflow-wrap: anywhere; }
   .hide {
     padding: 14px 0 6px;
     border-bottom: 1px solid var(--line);

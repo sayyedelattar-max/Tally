@@ -8,6 +8,7 @@
 //! The UI layer talks to [`store::Store`]; playback is handled separately by libmpv.
 
 pub mod error;
+pub mod library;
 pub mod m3u;
 pub mod model;
 pub mod norm;

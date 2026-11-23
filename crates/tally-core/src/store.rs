@@ -224,6 +224,33 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Channel groups with their sizes, largest first (the category chips).
+    pub fn groups(&self) -> Result<Vec<(String, i64)>> {
+        let mut st = self
+            .conn
+            .prepare_cached("SELECT grp, COUNT(*) AS n FROM channels GROUP BY grp ORDER BY n DESC, grp")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Like [`Store::channels_after`], limited to one group.
+    pub fn channels_in_group_after(&self, group: &str, cursor: Option<(i64, i64)>, limit: usize) -> Result<Vec<ChannelRow>> {
+        let (n, id) = cursor.unwrap_or((i64::MIN, i64::MIN));
+        let sql = format!(
+            "SELECT {CH_COLS} FROM channels WHERE grp = ?1 AND (number, id) > (?2, ?3)
+             ORDER BY number, id LIMIT ?4"
+        );
+        let mut st = self.conn.prepare_cached(&sql)?;
+        let rows = st.query_map(params![group, n, id, limit as i64], channel_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn channel_by_id(&self, id: i64) -> Result<Option<ChannelRow>> {
+        let sql = format!("SELECT {CH_COLS} FROM channels WHERE id = ?1");
+        let mut st = self.conn.prepare_cached(&sql)?;
+        Ok(st.query_map([id], channel_row)?.next().transpose()?)
+    }
+
     pub fn channel_by_number(&self, number: i64) -> Result<Option<ChannelRow>> {
         let sql = format!("SELECT {CH_COLS} FROM channels WHERE number = ?1 ORDER BY id LIMIT 1");
         let mut st = self.conn.prepare_cached(&sql)?;
@@ -484,6 +511,28 @@ mod tests {
         ])
         .unwrap();
         s
+    }
+
+    #[test]
+    fn groups_and_group_paging() {
+        let mut s = Store::open_memory().unwrap();
+        let g = |name: &str, group: &str, n: u32| Channel {
+            name: name.into(),
+            group: group.into(),
+            number: Some(n),
+            url: format!("http://s/{n}"),
+            ..Default::default()
+        };
+        s.import_channels(vec![g("A", "News", 1), g("B", "Sport", 2), g("C", "News", 3), g("D", "News", 4)])
+            .unwrap();
+        assert_eq!(s.groups().unwrap(), vec![("News".to_string(), 3), ("Sport".to_string(), 1)]);
+        let first = s.channels_in_group_after("News", None, 2).unwrap();
+        assert_eq!(first.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["A", "C"]);
+        let last = first.last().unwrap();
+        let rest = s.channels_in_group_after("News", Some((last.number.unwrap(), last.id)), 2).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].name, "D");
+        assert_eq!(s.channel_by_id(rest[0].id).unwrap().unwrap().name, "D");
     }
 
     #[test]
