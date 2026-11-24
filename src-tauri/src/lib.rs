@@ -223,7 +223,7 @@ async fn play_channel(lib: Lib<'_>, proxy: State<'_, Proxy>, id: i64) -> std::re
         let store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
         let ch = store.channel_by_id(id)?.ok_or_else(|| Error::Account("channel not found".into()))?;
         proxy.new_session();
-        Ok(PlayDto { url: proxy.url_for(&ch.url) })
+        Ok(PlayDto { url: proxy.live_url_for(&ch.url) })
     })
     .await
 }

@@ -96,6 +96,12 @@ impl Proxy {
         format!("http://127.0.0.1:{}/s/{}/{}", self.port, self.secret, B64.encode(upstream))
     }
 
+    /// Address for a live channel: the proxy follows the provider's playlist itself and hands the
+    /// player one continuous stream, so the account is only ever asked for one thing at a time.
+    pub fn live_url_for(&self, upstream: &str) -> String {
+        format!("http://127.0.0.1:{}/t/{}/{}", self.port, self.secret, B64.encode(upstream))
+    }
+
     fn handle(&self, mut stream: TcpStream, agent: &ureq::Agent) -> std::io::Result<()> {
         stream.set_read_timeout(Some(Duration::from_secs(15)))?;
         let mut reader = BufReader::new(stream.try_clone()?);
@@ -123,7 +129,10 @@ impl Proxy {
             return reply(&mut stream, 405, "Method Not Allowed", &[], b"");
         }
         let prefix = format!("/s/{}/", self.secret);
-        let Some(token) = path.strip_prefix(prefix.as_str()) else {
+        let live_prefix = format!("/t/{}/", self.secret);
+        let live = path.starts_with(live_prefix.as_str());
+        let lead: usize = path.split("lead=").nth(1).and_then(|v| v.split('&').next()).and_then(|v| v.parse().ok()).unwrap_or(3usize).clamp(1, 8);
+        let Some(token) = path.strip_prefix(prefix.as_str()).or_else(|| path.strip_prefix(live_prefix.as_str())) else {
             return reply(&mut stream, 403, "Forbidden", &[], b"");
         };
         let upstream = B64
@@ -188,6 +197,14 @@ impl Proxy {
         if !is_playlist && cached.is_some() && (status != 200 || first.first() != Some(&0x47)) {
             return serve_cached(&mut stream);
         }
+        if is_playlist && live && method == "GET" {
+            let mut rest = Vec::new();
+            body.by_ref().take(2 * 1024 * 1024).read_to_end(&mut rest)?;
+            let mut all = first;
+            all.extend_from_slice(&rest);
+            let text = String::from_utf8_lossy(&all).into_owned();
+            return self.restream(&mut stream, agent, text, &final_uri, &upstream, epoch, lead);
+        }
         if is_playlist {
             let mut rest = Vec::new();
             body.by_ref().take(8 * 1024 * 1024).read_to_end(&mut rest)?;
@@ -234,6 +251,167 @@ impl Proxy {
             }
         }
         Ok(())
+    }
+}
+
+impl Proxy {
+    /// Fetch a playlist as text (with a few polite retries); returns the text and where it was finally served from.
+    fn fetch_playlist(&self, agent: &ureq::Agent, url: &str) -> Option<(String, String)> {
+        for attempt in 0..3u64 {
+            match agent.get(url).call() {
+                Ok(r) if r.status().as_u16() == 200 => {
+                    let at = r.get_uri().to_string();
+                    let mut buf = Vec::new();
+                    if r.into_body().into_reader().take(2 * 1024 * 1024).read_to_end(&mut buf).is_ok() {
+                        let text = String::from_utf8_lossy(strip_bom(&buf)).into_owned();
+                        if text.trim_start().starts_with("#EXTM3U") {
+                            return Some((text, at));
+                        }
+                        self.note("a playlist refresh did not return a playlist".into());
+                    }
+                }
+                Ok(r) => self.note(format!("a playlist refresh returned status {}", r.status().as_u16())),
+                Err(e) => self.note(format!("a playlist refresh failed: {}", scrub(&e.to_string(), url))),
+            }
+            std::thread::sleep(Duration::from_millis(500 * (attempt + 1)));
+        }
+        None
+    }
+
+    /// Turn a live HLS playlist into one continuous MPEG-TS stream on this connection.
+    #[allow(clippy::too_many_arguments)]
+    fn restream(&self, stream: &mut TcpStream, agent: &ureq::Agent, text: String, final_uri: &str, upstream: &str, epoch: u64, lead: usize) -> std::io::Result<()> {
+        let gone = || self.epoch.load(Ordering::Relaxed) != epoch;
+        let mut media_url = final_uri.to_string();
+        let mut text = text;
+        // A master playlist lists qualities: follow the best one.
+        if text.contains("#EXT-X-STREAM-INF") {
+            let mut best: Option<(u64, String)> = None;
+            let mut bw: Option<u64> = None;
+            for l in text.lines().map(str::trim) {
+                if let Some(attrs) = l.strip_prefix("#EXT-X-STREAM-INF:") {
+                    bw = attrs.split(',').find_map(|a| a.trim().strip_prefix("BANDWIDTH=")).and_then(|v| v.parse().ok()).or(Some(0));
+                } else if !l.is_empty() && !l.starts_with('#') {
+                    if let Some(b) = bw.take() {
+                        if best.as_ref().map_or(true, |x| b > x.0) {
+                            best = Some((b, l.to_string()));
+                        }
+                    }
+                }
+            }
+            let joined = best.and_then(|(_, rel)| Url::parse(&media_url).ok()?.join(&rel).ok());
+            let Some(variant) = joined else { return reply(stream, 502, "Bad Gateway", &[], b"no playable quality in the playlist") };
+            match self.fetch_playlist(agent, variant.as_str()) {
+                Some((t, at)) => {
+                    text = t;
+                    media_url = at;
+                }
+                None => return reply(stream, 502, "Bad Gateway", &[], b"the provider did not deliver the playlist"),
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n")?;
+
+        let mut seen: std::collections::VecDeque<String> = Default::default();
+        let mut first_round = true;
+        let mut strikes = 0u32;
+        loop {
+            if gone() {
+                return Ok(());
+            }
+            let base = Url::parse(&media_url).ok();
+            let mut target = 6.0f64;
+            let mut ended = false;
+            let mut segs: Vec<Url> = Vec::new();
+            for l in text.lines().map(str::trim) {
+                if let Some(v) = l.strip_prefix("#EXT-X-TARGETDURATION:") {
+                    target = v.trim().parse().unwrap_or(6.0);
+                } else if l.starts_with("#EXT-X-ENDLIST") {
+                    ended = true;
+                } else if !l.is_empty() && !l.starts_with('#') {
+                    if let Some(u) = base.as_ref().and_then(|b| b.join(l).ok()) {
+                        segs.push(u);
+                    }
+                }
+            }
+            let mut fresh: Vec<Url> = segs.into_iter().filter(|u| !seen.iter().any(|k| k == u.path())).collect();
+            if first_round {
+                // Start a little behind the live edge so the player has something to chew on straight away.
+                let skip = fresh.len().saturating_sub(lead);
+                for u in fresh.drain(..skip) {
+                    seen.push_back(u.path().to_string());
+                }
+                first_round = false;
+            }
+            let mut wrote = false;
+            for u in fresh {
+                if gone() {
+                    return Ok(());
+                }
+                seen.push_back(u.path().to_string());
+                while seen.len() > 128 {
+                    seen.pop_front();
+                }
+                let mut ok = false;
+                for attempt in 0..3u64 {
+                    match agent.get(u.as_str()).call() {
+                        Ok(r) if r.status().as_u16() == 200 => {
+                            let mut body = r.into_body().into_reader();
+                            let mut buf = vec![0u8; 64 * 1024];
+                            loop {
+                                if gone() {
+                                    return Ok(());
+                                }
+                                match body.read(&mut buf) {
+                                    Ok(0) => {
+                                        ok = true;
+                                        break;
+                                    }
+                                    Ok(n) => {
+                                        if stream.write_all(&buf[..n]).is_err() {
+                                            return Ok(()); // the player moved on
+                                        }
+                                        wrote = true;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            if ok {
+                                break;
+                            }
+                        }
+                        Ok(r) => self.note(format!("a segment returned status {}", r.status().as_u16())),
+                        Err(e) => self.note(format!("a segment failed: {}", scrub(&e.to_string(), u.as_str()))),
+                    }
+                    std::thread::sleep(Duration::from_millis(400 * (attempt + 1)));
+                }
+                if ok { strikes = 0 } else { strikes += 1 }
+            }
+            if ended || strikes >= 4 {
+                return Ok(());
+            }
+            if !wrote {
+                std::thread::sleep(Duration::from_millis(((target * 1000.0 / 2.0) as u64).clamp(500, 3000)));
+            }
+            // refresh: the address we were served from first; a fresh start if it stopped working
+            match self.fetch_playlist(agent, &media_url) {
+                Some((t, at)) => {
+                    text = t;
+                    media_url = at;
+                }
+                None => match self.fetch_playlist(agent, upstream) {
+                    Some((t, at)) if !t.contains("#EXT-X-STREAM-INF") => {
+                        text = t;
+                        media_url = at;
+                    }
+                    _ => {
+                        strikes += 1;
+                        if strikes >= 4 {
+                            return Ok(());
+                        }
+                    }
+                },
+            }
+        }
     }
 }
 
@@ -427,6 +605,11 @@ mod tests {
                 let r = if line.contains("/live/1.m3u8") {
                     let b = "#EXTM3U\n#EXTINF:6,\nseg1.ts\n";
                     format!("HTTP/1.1 200 OK\r\nContent-Type: application/x-mpegURL\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}", b.len())
+                } else if line.contains("/live/end.m3u8") {
+                    let b = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg1.ts\n#EXTINF:2,\nseg2.ts\n#EXT-X-ENDLIST\n";
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/x-mpegURL\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}", b.len())
+                } else if line.contains("/live/seg2.ts") {
+                    "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: 5\r\nConnection: close\r\n\r\nabcde".to_string()
                 } else if line.contains("/live/seg1.ts") {
                     if req.to_ascii_lowercase().contains("range: bytes=2-5") {
                         "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-5/10\r\nContent-Length: 4\r\nConnection: close\r\n\r\n2345".to_string()
@@ -476,5 +659,19 @@ mod tests {
         let bad = seg.replacen(&proxy.secret.to_string(), "nope", 1);
         assert_eq!(fetch(&bad, None).0, 403);
         assert_eq!(fetch(&proxy.url_for(&format!("{up}/missing")), None).0, 404);
+    }
+
+    #[test]
+    fn live_playlist_becomes_one_continuous_stream() {
+        let up = provider();
+        let proxy = Proxy::start().unwrap();
+        let url = proxy.live_url_for(&format!("{up}/live/end.m3u8")) + "?lead=3";
+        let (st, data, h) = fetch(&url, None);
+        assert_eq!(st, 200);
+        assert!(h.iter().any(|(k, v)| k == "content-type" && v == "video/mp2t"));
+        assert_eq!(data, "0123456789abcde");
+        // starting nearer the live edge skips older entries
+        let (_, data, _) = fetch(&(proxy.live_url_for(&format!("{up}/live/end.m3u8")) + "?lead=1"), None);
+        assert_eq!(data, "abcde");
     }
 }
