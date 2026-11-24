@@ -26,6 +26,8 @@ const STREAM_UA: &str = "VLC/3.0.20 LibVLC/3.0.20";
 pub struct Proxy {
     port: u16,
     secret: Arc<str>,
+    /// Last good playlist per address, served when the provider hiccups on a refresh.
+    last_good: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
 }
 
 fn stream_agent() -> ureq::Agent {
@@ -53,7 +55,7 @@ impl Proxy {
     pub fn start() -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
-        let proxy = Proxy { port, secret: random_hex().into() };
+        let proxy = Proxy { port, secret: random_hex().into(), last_good: Default::default() };
         let me = proxy.clone();
         std::thread::spawn(move || {
             let agent = stream_agent();
@@ -116,8 +118,16 @@ impl Proxy {
         if let Some(r) = &range {
             req = req.header("Range", r);
         }
-        let resp = match req.call() {
+        let cached = self.last_good.lock().ok().and_then(|m| m.get(&upstream).cloned());
+        let serve_cached = |stream: &mut TcpStream| reply(stream, 200, "OK", &[("Content-Type", "application/vnd.apple.mpegurl")], cached.clone().unwrap_or_default().as_bytes());
+        let mut result = req.call();
+        if result.is_err() && cached.is_some() {
+            std::thread::sleep(Duration::from_millis(400));
+            result = agent.get(&upstream).call();
+        }
+        let resp = match result {
             Ok(r) => r,
+            Err(_) if cached.is_some() => return serve_cached(&mut stream),
             Err(e) => {
                 // Never echo the address: it contains the account password.
                 let msg = format!("upstream error: {}", scrub(&e.to_string(), &upstream));
@@ -137,6 +147,9 @@ impl Proxy {
         let got = read_some(&mut body, &mut first);
         first.truncate(got);
         let is_playlist = status == 200 && strip_bom(&first).trim_ascii_start().starts_with(b"#EXTM3U");
+        if !is_playlist && cached.is_some() && (status != 200 || first.first() != Some(&0x47)) {
+            return serve_cached(&mut stream);
+        }
         if is_playlist {
             let mut rest = Vec::new();
             body.by_ref().take(8 * 1024 * 1024).read_to_end(&mut rest)?;
@@ -147,6 +160,9 @@ impl Proxy {
                 Ok(base) => rewrite_playlist(&text, &base, |u| self.url_for(u)),
                 Err(_) => text,
             };
+            if let Ok(mut m) = self.last_good.lock() {
+                m.insert(upstream.clone(), out.clone());
+            }
             return reply(&mut stream, 200, "OK", &[("Content-Type", "application/vnd.apple.mpegurl")], out.as_bytes());
         }
         let ctype = if first.first() == Some(&0x47) && !ctype.to_ascii_lowercase().starts_with("video/") { "video/mp2t".to_string() } else { ctype };
@@ -227,6 +243,7 @@ pub fn diagnose(upstream: &str) -> String {
     let got = read_some(&mut body, &mut first);
     first.truncate(got);
     out.push(format!("first data after {} ms: {} ({} bytes read)", t1.elapsed().as_millis(), kind(&first), got));
+    let first_copy = first.clone();
     if kind(&first) == "HLS playlist" {
         let mut rest = Vec::new();
         let _ = body.by_ref().take(2 * 1024 * 1024).read_to_end(&mut rest);
@@ -253,6 +270,21 @@ pub fn diagnose(upstream: &str) -> String {
                     Err(e) => out.push(format!("first entry failed: {}", scrub(&e.to_string(), u.as_str()))),
                 }
             }
+        }
+    }
+    if kind(&first_copy) == "HLS playlist" {
+        std::thread::sleep(Duration::from_secs(2));
+        let t3 = Instant::now();
+        match agent.get(upstream).call() {
+            Ok(r) => {
+                let st = r.status().as_u16();
+                let mut b = r.into_body().into_reader();
+                let mut f = vec![0u8; 4096];
+                let n = read_some(&mut b, &mut f);
+                f.truncate(n);
+                out.push(format!("refresh after 2 s: status {st}, {} ms, {}", t3.elapsed().as_millis(), kind(&f)));
+            }
+            Err(e) => out.push(format!("refresh after 2 s failed: {}", scrub(&e.to_string(), upstream))),
         }
     }
     out.join("\n")

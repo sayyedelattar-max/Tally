@@ -41,10 +41,13 @@
     errKind = /codec|incompatible|bufferAppend|fragParsing/i.test(detail) ? 'codec' : 'other';
   }
 
+  // Playback buffer presets (Settings → Playback): seconds to keep ahead, and playlist entries to stay behind the live edge.
+  const BUFFER = { low: { ahead: 10, live: 3, stash: 384 }, balanced: { ahead: 30, live: 5, stash: 1536 }, stable: { ahead: 60, live: 8, stash: 4096 } };
+
   // Some providers answer a playlist address with a raw MPEG-TS stream; play that directly.
   function startTs(url: string, mine: number) {
     if (!video || !mpegts.isSupported()) return fail('manifest: not a playlist');
-    const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: true, liveBufferLatencyChasing: true });
+    const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: true, enableStashBuffer: true, stashInitialSize: (BUFFER[ui.settings.buffer as keyof typeof BUFFER] ?? BUFFER.balanced).stash * 1024 / 1024, liveBufferLatencyChasing: false, lazyLoad: false });
     p.on(mpegts.Events.ERROR, (type: string, detail: string) => { if (mine === ticket) fail(`${type}: ${detail}`); });
     ts = p;
     p.attachMediaElement(video);
@@ -72,9 +75,18 @@
         await video.play();
         return;
       }
-      const h = new Hls({ maxBufferLength: 20, backBufferLength: 30 });
+      const pre = BUFFER[ui.settings.buffer as keyof typeof BUFFER] ?? BUFFER.balanced;
+      const h = new Hls({
+        maxBufferLength: pre.ahead,
+        maxMaxBufferLength: pre.ahead * 2,
+        backBufferLength: 30,
+        liveSyncDurationCount: pre.live,
+        liveMaxLatencyDurationCount: pre.live + 6,
+        playlistLoadPolicy: { default: { maxTimeToFirstByteMs: 10000, maxLoadTimeMs: 20000, timeoutRetry: { maxNumRetry: 4, retryDelayMs: 500, maxRetryDelayMs: 4000 }, errorRetry: { maxNumRetry: 6, retryDelayMs: 500, maxRetryDelayMs: 4000 } } },
+      });
       let retries = 0;
       h.on(Hls.Events.MANIFEST_PARSED, () => video?.play().catch(() => {}));
+      h.on(Hls.Events.FRAG_LOADED, () => (retries = 0));
       h.on(Hls.Events.ERROR, (_e, d) => {
         if (!d.fatal) return;
         if (mine !== ticket) return;
@@ -83,7 +95,7 @@
           startTs(url, mine);
           return;
         }
-        if (d.type === Hls.ErrorTypes.NETWORK_ERROR && retries++ < 2) h.startLoad();
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR && retries++ < 6) h.startLoad();
         else if (d.type === Hls.ErrorTypes.MEDIA_ERROR && retries++ < 2) h.recoverMediaError();
         else fail(`${d.type}: ${d.details}`);
       });
