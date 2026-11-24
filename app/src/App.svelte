@@ -11,6 +11,7 @@
   import Playlists from './views/Playlists.svelte';
   import PlaylistsReal from './views/PlaylistsReal.svelte';
   import LiveReal from './views/LiveReal.svelte';
+  import TitlesReal from './views/TitlesReal.svelte';
   import Settings from './views/Settings.svelte';
   import { onMount } from 'svelte';
   import { ui, t, openSearch, loadRegistry } from './lib/store.svelte';
@@ -21,7 +22,7 @@
     loadRegistry().catch(() => {});
   });
 
-  const sample = $derived(inApp && ['home', 'movies', 'series', 'replay'].includes(ui.view));
+  const sample = $derived(inApp && ['home', 'replay'].includes(ui.view));
 
   $effect(() => {
     const el = document.documentElement;
@@ -64,7 +65,7 @@
       {#if sample}<p class="sample mono" role="note">{t('real.sample')}</p>{/if}
       {#if ui.view === 'home'}<Home />
       {:else if ui.view === 'live'}{#if inApp}<LiveReal />{:else}<Live />{/if}
-      {:else if ui.view === 'movies' || ui.view === 'series'}<Browse kind={ui.view === 'movies' ? 'movie' : 'series'} />
+      {:else if ui.view === 'movies' || ui.view === 'series'}{#if inApp}{#key ui.view}<TitlesReal kind={ui.view === 'movies' ? 'movie' : 'series'} />{/key}{:else}<Browse kind={ui.view === 'movies' ? 'movie' : 'series'} />{/if}
       {:else if ui.view === 'replay'}<Replay />
       {:else if ui.view === 'playlists'}{#if inApp}<PlaylistsReal />{:else}<Playlists />{/if}
       {:else}<Settings />{/if}

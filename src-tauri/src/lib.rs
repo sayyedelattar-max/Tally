@@ -222,18 +222,151 @@ async fn play_channel(lib: Lib<'_>, proxy: State<'_, Proxy>, id: i64) -> std::re
     blocking(move || {
         let store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
         let ch = store.channel_by_id(id)?.ok_or_else(|| Error::Account("channel not found".into()))?;
+        proxy.new_session();
         Ok(PlayDto { url: proxy.url_for(&ch.url) })
     })
     .await
 }
 
 #[tauri::command]
-async fn diagnose_channel(lib: Lib<'_>, id: i64) -> std::result::Result<String, String> {
-    let lib = lib.inner().clone();
+async fn diagnose_channel(lib: Lib<'_>, proxy: State<'_, Proxy>, id: i64) -> std::result::Result<String, String> {
+    let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
     blocking(move || {
         let store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
         let ch = store.channel_by_id(id)?.ok_or_else(|| Error::Account("channel not found".into()))?;
-        Ok(tally_core::proxy::diagnose(&ch.url))
+        let mut report = tally_core::proxy::diagnose(&ch.url);
+        let last = proxy.last_problem();
+        if !last.is_empty() {
+            report.push_str(&format!("\nlast problem seen while playing: {last}"));
+        }
+        Ok(report)
+    })
+    .await
+}
+
+// ---- movies and series
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TitleDto {
+    kind: String,
+    id: String,
+    name: String,
+    group: String,
+    poster: String,
+    plot: String,
+    rating: f64,
+    year: String,
+    ext: String,
+}
+
+fn title_dto(t: tally_core::model::Title, proxy: &Proxy) -> TitleDto {
+    TitleDto {
+        kind: t.kind,
+        id: t.ext_id,
+        name: t.name,
+        group: t.group,
+        poster: if t.poster.starts_with("http") { proxy.url_for(&t.poster) } else { String::new() },
+        plot: t.plot,
+        rating: t.rating,
+        year: t.year,
+        ext: t.ext,
+    }
+}
+
+#[derive(Serialize)]
+struct RowDto {
+    /// Empty for the "recently added" row; the UI gives it a localised name.
+    name: String,
+    recent: bool,
+    count: i64,
+    items: Vec<TitleDto>,
+}
+
+/// Shelves for the Movies / Series screens: recently added first, then each category.
+/// Downloads the catalogue first if this playlist never had it.
+#[tauri::command]
+async fn title_rows(lib: Lib<'_>, proxy: State<'_, Proxy>, kind: String, per_row: usize, max_rows: usize) -> std::result::Result<Vec<RowDto>, String> {
+    let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
+    blocking(move || {
+        let Some(mut store) = lib.active_store()? else { return Ok(Vec::new()) };
+        if store.title_count(&kind)? == 0 {
+            lib.sync_titles()?;
+            store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
+        }
+        let mut rows = Vec::new();
+        let recent = store.titles_recent(&kind, per_row)?;
+        if !recent.is_empty() {
+            rows.push(RowDto { name: String::new(), recent: true, count: store.title_count(&kind)?, items: recent.into_iter().map(|t| title_dto(t, &proxy)).collect() });
+        }
+        for (g, count) in store.title_groups(&kind)?.into_iter().take(max_rows) {
+            let items = store.titles_in(&kind, Some(&g), 0, per_row)?;
+            rows.push(RowDto { name: g, recent: false, count, items: items.into_iter().map(|t| title_dto(t, &proxy)).collect() });
+        }
+        Ok(rows)
+    })
+    .await
+}
+
+/// A category as a grid (paged), or search results when `query` is set.
+#[tauri::command]
+async fn title_page(lib: Lib<'_>, proxy: State<'_, Proxy>, kind: String, group: Option<String>, query: Option<String>, offset: usize, limit: usize) -> std::result::Result<Vec<TitleDto>, String> {
+    let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
+    blocking(move || {
+        let Some(store) = lib.active_store()? else { return Ok(Vec::new()) };
+        let list = match query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+            Some(q) => store.titles_search(&kind, q, limit)?,
+            None if group.is_none() && offset == 0 && limit == 0 => Vec::new(),
+            None => store.titles_in(&kind, group.as_deref(), offset, limit)?,
+        };
+        Ok(list.into_iter().map(|t| title_dto(t, &proxy)).collect())
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeDto {
+    id: String,
+    season: u32,
+    number: u32,
+    title: String,
+    plot: String,
+    duration: String,
+    ext: String,
+}
+
+#[derive(Serialize)]
+struct SeriesDto {
+    name: String,
+    plot: String,
+    episodes: Vec<EpisodeDto>,
+}
+
+#[tauri::command]
+async fn series_detail(lib: Lib<'_>, id: String) -> std::result::Result<SeriesDto, String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let client = lib.client()?.ok_or_else(|| Error::Account("no playlist".into()))?;
+        let d = client.series_detail(&id)?;
+        Ok(SeriesDto {
+            name: d.name,
+            plot: d.plot,
+            episodes: d.episodes.into_iter().map(|e| EpisodeDto { id: e.id, season: e.season, number: e.number, title: e.title, plot: e.plot, duration: e.duration, ext: e.ext }).collect(),
+        })
+    })
+    .await
+}
+
+/// `kind` is `movie` or `episode`. The address stays here; the UI only receives the local one.
+#[tauri::command]
+async fn play_title(lib: Lib<'_>, proxy: State<'_, Proxy>, kind: String, id: String, ext: String) -> std::result::Result<PlayDto, String> {
+    let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
+    blocking(move || {
+        let client = lib.client()?.ok_or_else(|| Error::Account("no playlist".into()))?;
+        let url = if kind == "movie" { client.movie_url(&id, &ext) } else { client.episode_url(&id, &ext) };
+        proxy.new_session();
+        Ok(PlayDto { url: proxy.url_for(&url) })
     })
     .await
 }
@@ -282,6 +415,10 @@ pub fn run() {
             set_favorite,
             play_channel,
             diagnose_channel,
+            title_rows,
+            title_page,
+            series_detail,
+            play_title,
             live_favorites,
             reorder_favorites,
             core_version

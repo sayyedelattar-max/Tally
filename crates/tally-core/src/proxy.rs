@@ -18,6 +18,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 use ureq::ResponseExt;
+use std::sync::atomic::Ordering;
 use url::Url;
 
 const STREAM_UA: &str = "VLC/3.0.20 LibVLC/3.0.20";
@@ -28,6 +29,10 @@ pub struct Proxy {
     secret: Arc<str>,
     /// Last good playlist per address, served when the provider hiccups on a refresh.
     last_good: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// Bumped when a new thing starts playing, so a stream nobody watches any more is dropped and
+    /// stops holding the account's only connection.
+    epoch: Arc<std::sync::atomic::AtomicU64>,
+    problem: Arc<std::sync::Mutex<String>>,
 }
 
 fn stream_agent() -> ureq::Agent {
@@ -55,7 +60,7 @@ impl Proxy {
     pub fn start() -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
-        let proxy = Proxy { port, secret: random_hex().into(), last_good: Default::default() };
+        let proxy = Proxy { port, secret: random_hex().into(), last_good: Default::default(), epoch: Default::default(), problem: Default::default() };
         let me = proxy.clone();
         std::thread::spawn(move || {
             let agent = stream_agent();
@@ -68,6 +73,22 @@ impl Proxy {
             }
         });
         Ok(proxy)
+    }
+
+    /// Call when the user starts something new: older open streams are closed.
+    pub fn new_session(&self) {
+        self.epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn note(&self, what: String) {
+        if let Ok(mut p) = self.problem.lock() {
+            *p = what;
+        }
+    }
+
+    /// The last thing that went wrong with the provider (no address or credentials in it).
+    pub fn last_problem(&self) -> String {
+        self.problem.lock().map(|p| p.clone()).unwrap_or_default()
     }
 
     /// The address the player should open for an upstream address.
@@ -114,38 +135,55 @@ impl Proxy {
             return reply(&mut stream, 400, "Bad Request", &[], b"bad address");
         };
 
-        let mut req = agent.get(&upstream);
-        if let Some(r) = &range {
-            req = req.header("Range", r);
-        }
+        let epoch = self.epoch.load(Ordering::Relaxed);
         let cached = self.last_good.lock().ok().and_then(|m| m.get(&upstream).cloned());
         let serve_cached = |stream: &mut TcpStream| reply(stream, 200, "OK", &[("Content-Type", "application/vnd.apple.mpegurl")], cached.clone().unwrap_or_default().as_bytes());
-        let mut result = req.call();
-        if result.is_err() && cached.is_some() {
-            std::thread::sleep(Duration::from_millis(400));
-            result = agent.get(&upstream).call();
-        }
-        let resp = match result {
-            Ok(r) => r,
-            Err(_) if cached.is_some() => return serve_cached(&mut stream),
-            Err(e) => {
-                // Never echo the address: it contains the account password.
-                let msg = format!("upstream error: {}", scrub(&e.to_string(), &upstream));
-                return reply(&mut stream, 502, "Bad Gateway", &[], msg.as_bytes());
+        let mut attempt = 0;
+        // A provider that is still counting your previous connection answers with an error page or a
+        // 4xx for a moment. Wait briefly and ask again instead of handing that to the player.
+        let (status, final_uri, hdrs, mut body, first) = loop {
+            attempt += 1;
+            let mut req = agent.get(&upstream);
+            if let Some(r) = &range {
+                req = req.header("Range", r);
+            }
+            match req.call() {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let final_uri = resp.get_uri().to_string();
+                    let hdrs: Vec<(String, String)> = resp.headers().iter().map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect();
+                    let ct = hdrs.iter().find(|(k, _)| k == "content-type").map(|(_, v)| v.to_ascii_lowercase()).unwrap_or_default();
+                    let mut body = resp.into_body().into_reader();
+                    let mut first = vec![0u8; 4096];
+                    let got = read_some(&mut body, &mut first);
+                    first.truncate(got);
+                    let bad = (status >= 400 && status != 404 && status != 416) || (status == 200 && (ct.starts_with("text/html") || ct.contains("json")));
+                    if bad {
+                        self.note(format!("status {status}, {}", if ct.is_empty() { "-" } else { &ct }));
+                        if range.is_none() && attempt < 3 {
+                            std::thread::sleep(Duration::from_millis(1200));
+                            continue;
+                        }
+                    }
+                    break (status, final_uri, hdrs, body, first);
+                }
+                Err(e) => {
+                    self.note(format!("request failed: {}", scrub(&e.to_string(), &upstream)));
+                    if attempt < 3 {
+                        std::thread::sleep(Duration::from_millis(1000));
+                        continue;
+                    }
+                    if cached.is_some() {
+                        return serve_cached(&mut stream);
+                    }
+                    // Never echo the address: it contains the account password.
+                    let msg = format!("upstream error: {}", scrub(&e.to_string(), &upstream));
+                    return reply(&mut stream, 502, "Bad Gateway", &[], msg.as_bytes());
+                }
             }
         };
-        let status = resp.status().as_u16();
-        let final_uri = resp.get_uri().to_string();
-        let hdrs: Vec<(String, String)> = resp.headers().iter().map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect();
         let header = |n: &str| hdrs.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
         let ctype = header("content-type").unwrap_or_default();
-        let mut body = resp.into_body().into_reader();
-
-        // Decide by what the provider actually sends, not by the address: some panels answer a
-        // `.m3u8` request with a raw MPEG-TS stream, which must never be buffered as a "playlist".
-        let mut first = vec![0u8; 4096];
-        let got = read_some(&mut body, &mut first);
-        first.truncate(got);
         let is_playlist = status == 200 && strip_bom(&first).trim_ascii_start().starts_with(b"#EXTM3U");
         if !is_playlist && cached.is_some() && (status != 200 || first.first() != Some(&0x47)) {
             return serve_cached(&mut stream);
@@ -184,6 +222,9 @@ impl Proxy {
         }
         let mut buf = [0u8; 64 * 1024];
         loop {
+            if self.epoch.load(Ordering::Relaxed) != epoch {
+                break;
+            }
             let n = match body.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,

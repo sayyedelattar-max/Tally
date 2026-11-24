@@ -17,7 +17,12 @@ export type PlaylistInfo = {
 };
 export type Registry = { active: string | null; items: PlaylistInfo[] };
 export type Group = { name: string; count: number };
-export type Chan = { id: number; tvgId: string; name: string; group: string; logo: string; number: number | null; fav: boolean };
+export type VodRef = { kind: 'movie' | 'episode'; id: string; ext: string };
+export type Chan = { id: number; tvgId: string; name: string; group: string; logo: string; number: number | null; fav: boolean; vod?: VodRef };
+export type TitleItem = { kind: 'movie' | 'series'; id: string; name: string; group: string; poster: string; plot: string; rating: number; year: string; ext: string };
+export type Shelf = { name: string; recent: boolean; count: number; items: TitleItem[] };
+export type EpisodeItem = { id: string; season: number; number: number; title: string; plot: string; duration: string; ext: string };
+export type SeriesInfo = { name: string; plot: string; episodes: EpisodeItem[] };
 export type ChanPage = { rows: Chan[]; next: [number, number] | null };
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -35,6 +40,10 @@ export const api = {
   channels: (a: { group: string | null; query: string | null; after: [number, number] | null; limit: number }) => call<ChanPage>('live_channels', a),
   diagnose: (id: number) => call<string>('diagnose_channel', { id }),
   play: (id: number) => call<{ url: string }>('play_channel', { id }),
+  shelves: (kind: string, perRow: number, maxRows: number) => call<Shelf[]>('title_rows', { kind, perRow, maxRows }),
+  titles: (a: { kind: string; group: string | null; query: string | null; offset: number; limit: number }) => call<TitleItem[]>('title_page', a),
+  series: (id: string) => call<SeriesInfo>('series_detail', { id }),
+  playTitle: (v: VodRef) => call<{ url: string }>('play_title', { kind: v.kind, id: v.id, ext: v.ext }),
   favorites: () => call<Chan[]>('live_favorites'),
   reorder: (ids: number[]) => call<void>('reorder_favorites', { ids }),
   setFavorite: (id: number, fav: boolean) => call<void>('set_favorite', { id, fav }),

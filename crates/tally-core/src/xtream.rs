@@ -9,7 +9,7 @@
 
 use crate::error::{Error, Result};
 use crate::m3u::parse_m3u;
-use crate::model::{Channel, Programme};
+use crate::model::{Channel, Programme, SeriesDetail, Episode, Title};
 use crate::xmltv::parse_xmltv;
 use serde_json::Value;
 use std::fmt;
@@ -56,6 +56,29 @@ pub struct AccountInfo {
 }
 
 /// Xtream panels send ids as numbers or as strings, depending on the panel.
+fn num_f(v: &Value) -> f64 {
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        Value::String(s) => s.trim().parse().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.trim().to_string(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn first_text(v: &Value) -> String {
+    match v {
+        Value::Array(a) => a.first().map(text).unwrap_or_default(),
+        other => text(other),
+    }
+}
+
 fn id_str(v: &Value) -> Option<String> {
     match v {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
@@ -173,6 +196,83 @@ impl XtreamClient {
             .read_to_string()
             .map_err(|e| Error::Http(self.scrub(&e.to_string())))?;
         serde_json::from_str(&text).map_err(|_| Error::Account(format!("unexpected reply to {action}")))
+    }
+
+    /// Movies (`kind` = `movie`) or series (`series`) with their categories.
+    pub fn titles(&self, kind: &str, mut sink: impl FnMut(Title)) -> Result<usize> {
+        let (cats, list) = if kind == "movie" { ("get_vod_categories", "get_vod_streams") } else { ("get_series_categories", "get_series") };
+        let mut names = std::collections::HashMap::new();
+        if let Ok(Value::Array(cs)) = self.json(cats) {
+            for c in cs {
+                if let (Some(id), Some(name)) = (id_str(&c["category_id"]), c["category_name"].as_str()) {
+                    names.insert(id, name.trim().to_string());
+                }
+            }
+        }
+        let items = match self.json(list)? {
+            Value::Array(a) => a,
+            _ => return Ok(0),
+        };
+        let mut n = 0;
+        for it in &items {
+            let idkey = if kind == "movie" { "stream_id" } else { "series_id" };
+            let (Some(id), Some(name)) = (id_str(&it[idkey]), it["name"].as_str()) else { continue };
+            let poster = if kind == "movie" { text(&it["stream_icon"]) } else { first_text(&it["cover"]) };
+            let added = if kind == "movie" { num_f(&it["added"]) } else { num_f(&it["last_modified"]) } as i64;
+            let year = {
+                let y = text(&it["year"]);
+                if y.is_empty() { text(&it["releaseDate"]).chars().take(4).collect() } else { y }
+            };
+            sink(Title {
+                kind: kind.to_string(),
+                ext_id: id,
+                name: name.trim().to_string(),
+                group: id_str(&it["category_id"]).and_then(|c| names.get(&c).cloned()).unwrap_or_default(),
+                poster,
+                plot: text(&it["plot"]),
+                rating: if it.get("rating_5based").is_some() && num_f(&it["rating"]) == 0.0 { num_f(&it["rating_5based"]) * 2.0 } else { num_f(&it["rating"]) },
+                year,
+                added,
+                ext: if kind == "movie" { text(&it["container_extension"]) } else { String::new() },
+            });
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Seasons and episodes of one series.
+    pub fn series_detail(&self, series_id: &str) -> Result<SeriesDetail> {
+        let v = self.json(&format!("get_series_info&series_id={}", encode(series_id)))?;
+        let info = &v["info"];
+        let mut out = SeriesDetail { name: text(&info["name"]), plot: text(&info["plot"]), poster: first_text(&info["cover"]), episodes: Vec::new() };
+        if let Value::Object(seasons) = &v["episodes"] {
+            for (sn, list) in seasons {
+                let Value::Array(list) = list else { continue };
+                for e in list {
+                    let Some(id) = id_str(&e["id"]) else { continue };
+                    out.episodes.push(Episode {
+                        id,
+                        season: sn.parse().unwrap_or_else(|_| num_f(&e["season"]) as u32),
+                        number: num_f(&e["episode_num"]) as u32,
+                        title: text(&e["title"]),
+                        plot: text(&e["info"]["plot"]),
+                        duration: text(&e["info"]["duration"]),
+                        image: text(&e["info"]["movie_image"]),
+                        ext: { let x = text(&e["container_extension"]); if x.is_empty() { "mp4".into() } else { x } },
+                    });
+                }
+            }
+        }
+        out.episodes.sort_by_key(|e| (e.season, e.number));
+        Ok(out)
+    }
+
+    pub fn movie_url(&self, id: &str, ext: &str) -> String {
+        format!("{}/movie/{}/{}/{}.{}", self.base, encode(&self.user), encode(&self.pass), id, if ext.is_empty() { "mp4" } else { ext })
+    }
+
+    pub fn episode_url(&self, id: &str, ext: &str) -> String {
+        format!("{}/series/{}/{}/{}.{}", self.base, encode(&self.user), encode(&self.pass), id, if ext.is_empty() { "mp4" } else { ext })
     }
 
     fn playlist_json(&self, sink: &mut impl FnMut(Channel)) -> Result<usize> {

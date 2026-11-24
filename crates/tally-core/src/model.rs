@@ -23,3 +23,44 @@ pub struct Programme {
     pub title: String,
     pub desc: String,
 }
+
+/// A movie or a series from the provider's on-demand catalogue.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Title {
+    /// `movie` or `series`.
+    pub kind: String,
+    /// The provider's id for it.
+    pub ext_id: String,
+    pub name: String,
+    pub group: String,
+    pub poster: String,
+    pub plot: String,
+    pub rating: f64,
+    pub year: String,
+    /// Unix seconds when the provider added it (0 if unknown).
+    pub added: i64,
+    /// Container the file comes in (`mp4`, `mkv`…). Empty for series.
+    pub ext: String,
+}
+
+/// One episode of a series.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Episode {
+    pub id: String,
+    pub season: u32,
+    pub number: u32,
+    pub title: String,
+    pub plot: String,
+    pub duration: String,
+    pub image: String,
+    pub ext: String,
+}
+
+/// A series with its episodes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SeriesDetail {
+    pub name: String,
+    pub plot: String,
+    pub poster: String,
+    pub episodes: Vec<Episode>,
+}

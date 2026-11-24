@@ -9,7 +9,7 @@
 //! * Paging is keyset-based (`channels_after`) so scrolling 100k rows never gets slower.
 
 use crate::error::Result;
-use crate::model::{Channel, Programme};
+use crate::model::{Channel, Programme, Title};
 use crate::norm::normalize;
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -29,6 +29,16 @@ CREATE TABLE IF NOT EXISTS channels(
   fav_pos INTEGER NOT NULL DEFAULT 0,
   gen INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS titles(
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL, ext_id TEXT NOT NULL, name TEXT NOT NULL, norm TEXT NOT NULL,
+    grp TEXT NOT NULL DEFAULT '', poster TEXT NOT NULL DEFAULT '', plot TEXT NOT NULL DEFAULT '',
+    rating REAL NOT NULL DEFAULT 0, year TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL DEFAULT 0,
+    ext TEXT NOT NULL DEFAULT '',
+    UNIQUE(kind, ext_id)
+);
+CREATE INDEX IF NOT EXISTS titles_kind_grp ON titles(kind, grp, id);
+CREATE INDEX IF NOT EXISTS titles_kind_added ON titles(kind, added DESC);
 CREATE INDEX IF NOT EXISTS channels_number ON channels(number, id);
 CREATE INDEX IF NOT EXISTS channels_tvg ON channels(tvg_id);
 
@@ -137,6 +147,90 @@ impl Store {
             conn.execute_batch("ALTER TABLE channels ADD COLUMN fav_pos INTEGER NOT NULL DEFAULT 0;")?;
         }
         Ok(Self { conn })
+    }
+
+    // ------------------------------------------------------ movies and series
+
+    /// Replace everything of one kind (`movie` / `series`) with a fresh download.
+    pub fn import_titles(&mut self, kind: &str, items: Vec<Title>) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM titles WHERE kind = ?1", params![kind])?;
+        let mut n = 0;
+        {
+            let mut ins = tx.prepare(
+                "INSERT OR REPLACE INTO titles(kind, ext_id, name, norm, grp, poster, plot, rating, year, added, ext)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            )?;
+            for t in &items {
+                ins.execute(params![kind, t.ext_id, t.name, normalize(&t.name), t.group, t.poster, t.plot, t.rating, t.year, t.added, t.ext])?;
+                n += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    pub fn title_count(&self, kind: &str) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM titles WHERE kind = ?1", params![kind], |r| r.get(0))?)
+    }
+
+    /// Categories in the provider's order, with how many titles each holds.
+    pub fn title_groups(&self, kind: &str) -> Result<Vec<(String, i64)>> {
+        let mut st = self.conn.prepare("SELECT grp, COUNT(*) FROM titles WHERE kind = ?1 GROUP BY grp ORDER BY MIN(id)")?;
+        let rows = st.query_map(params![kind], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    fn title_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Title> {
+        Ok(Title {
+            kind: r.get(0)?,
+            ext_id: r.get(1)?,
+            name: r.get(2)?,
+            group: r.get(3)?,
+            poster: r.get(4)?,
+            plot: r.get(5)?,
+            rating: r.get(6)?,
+            year: r.get(7)?,
+            added: r.get(8)?,
+            ext: r.get(9)?,
+        })
+    }
+
+    const TITLE_COLS: &'static str = "kind, ext_id, name, grp, poster, plot, rating, year, added, ext";
+
+    /// Newest first (by the provider's "added" time).
+    pub fn titles_recent(&self, kind: &str, limit: usize) -> Result<Vec<Title>> {
+        let sql = format!("SELECT {} FROM titles WHERE kind = ?1 ORDER BY added DESC, id LIMIT ?2", Self::TITLE_COLS);
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map(params![kind, limit as i64], Self::title_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// One category (or all when `group` is `None`), in the provider's order, paged by offset.
+    pub fn titles_in(&self, kind: &str, group: Option<&str>, offset: usize, limit: usize) -> Result<Vec<Title>> {
+        let sql = format!(
+            "SELECT {} FROM titles WHERE kind = ?1 AND (?2 IS NULL OR grp = ?2) ORDER BY id LIMIT ?3 OFFSET ?4",
+            Self::TITLE_COLS
+        );
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map(params![kind, group, limit as i64, offset as i64], Self::title_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn titles_search(&self, kind: &str, query: &str, limit: usize) -> Result<Vec<Title>> {
+        let q = normalize(query);
+        let like = format!("%{}%", q.replace('%', "").replace('_', ""));
+        let sql = format!("SELECT {} FROM titles WHERE kind = ?1 AND norm LIKE ?2 ORDER BY id LIMIT ?3", Self::TITLE_COLS);
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map(params![kind, like, limit as i64], Self::title_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub fn title(&self, kind: &str, ext_id: &str) -> Result<Option<Title>> {
+        let sql = format!("SELECT {} FROM titles WHERE kind = ?1 AND ext_id = ?2", Self::TITLE_COLS);
+        let mut st = self.conn.prepare(&sql)?;
+        let mut rows = st.query_map(params![kind, ext_id], Self::title_row)?;
+        Ok(rows.next().transpose()?)
     }
 
     // ---------------------------------------------------------------- import
@@ -548,6 +642,23 @@ mod tests {
         ])
         .unwrap();
         s
+    }
+
+    #[test]
+    fn titles_import_group_page_and_search() {
+        let mut st = Store::open_memory().unwrap();
+        let mk = |id: &str, name: &str, g: &str, added: i64| Title { kind: "movie".into(), ext_id: id.into(), name: name.into(), group: g.into(), added, ext: "mp4".into(), ..Default::default() };
+        st.import_titles("movie", vec![mk("1", "Alpha", "Action", 10), mk("2", "فيلم الليل", "عربي", 30), mk("3", "Gamma", "Action", 20)]).unwrap();
+        st.import_titles("series", vec![Title { kind: "series".into(), ext_id: "9".into(), name: "Show".into(), ..Default::default() }]).unwrap();
+        assert_eq!(st.title_count("movie").unwrap(), 3);
+        assert_eq!(st.title_groups("movie").unwrap(), vec![("Action".to_string(), 2), ("عربي".to_string(), 1)]);
+        assert_eq!(st.titles_recent("movie", 2).unwrap().iter().map(|t| t.ext_id.as_str()).collect::<Vec<_>>(), ["2", "3"]);
+        assert_eq!(st.titles_in("movie", Some("Action"), 1, 5).unwrap().len(), 1);
+        assert_eq!(st.titles_search("movie", "ليل", 5).unwrap().len(), 1);
+        // a re-import replaces only its own kind
+        st.import_titles("movie", vec![mk("7", "Solo", "X", 1)]).unwrap();
+        assert_eq!(st.title_count("series").unwrap(), 1);
+        assert_eq!(st.title("movie", "7").unwrap().unwrap().name, "Solo");
     }
 
     #[test]

@@ -142,6 +142,8 @@ impl Library {
         }
         let mut store = Store::open(&self.db_path(&id))?;
         let n = store.import_channels(list)?;
+        // Movies and series are a bonus: a provider without them must not block adding the playlist.
+        let _ = sync_titles_into(&client, &mut store);
         self.secrets.set(&id, &pass)?;
 
         let meta = PlaylistMeta {
@@ -190,6 +192,22 @@ impl Library {
         self.write(&Some(id.to_string()), &items)
     }
 
+    /// A client for the active playlist's server, built from the saved login.
+    pub fn client(&self) -> Result<Option<XtreamClient>> {
+        let (active, items) = self.read()?;
+        let Some(m) = active.and_then(|a| items.into_iter().find(|m| m.id == a)).or_else(|| self.read().ok().and_then(|(_, i)| i.into_iter().next())) else {
+            return Ok(None);
+        };
+        let pass = self.secrets.get(&m.id).ok_or_else(|| Error::Account("the saved password is missing; edit the playlist and enter it again".into()))?;
+        Ok(Some(XtreamClient::new(&m.host, &m.user, &pass)))
+    }
+
+    /// Download movies and series for the active playlist (used when they were never fetched).
+    pub fn sync_titles(&self) -> Result<usize> {
+        let (Some(client), Some(mut store)) = (self.client()?, self.active_store()?) else { return Ok(0) };
+        sync_titles_into(&client, &mut store)
+    }
+
     /// The channel database of the active playlist, if there is one.
     pub fn active_store(&self) -> Result<Option<Store>> {
         match self.list()?.0 {
@@ -205,6 +223,22 @@ impl Library {
             p.push(suffix);
             let _ = std::fs::remove_file(Path::new(&p));
         }
+    }
+}
+
+fn sync_titles_into(client: &XtreamClient, store: &mut Store) -> Result<usize> {
+    let mut total = 0;
+    let mut last_err = None;
+    for kind in ["movie", "series"] {
+        let mut list = Vec::new();
+        match client.titles(kind, |t| list.push(t)) {
+            Ok(_) => total += store.import_titles(kind, list)?,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match (total, last_err) {
+        (0, Some(e)) => Err(e),
+        _ => Ok(total),
     }
 }
 

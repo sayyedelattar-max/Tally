@@ -1,13 +1,17 @@
 type Dict = Record<string, string>;
 
 const en: Dict = {
+  'vod.recent': 'Recently added', 'vod.seeAll': 'See all', 'vod.search.movie': 'Search movies', 'vod.search.series': 'Search series',
+  'vod.empty': 'Nothing here yet', 'vod.emptyLead': 'Your provider has no titles in this section, or the download failed.', 'vod.loading': 'Loading your library…',
+  'vod.play': 'Play', 'vod.season': 'Season', 'vod.episode': 'Episode', 'vod.episodes': 'Episodes', 'vod.nextEp': 'Next episode', 'vod.titles': 'titles', 'vod.error': 'Could not load', 'vod.retry': 'Try again', 'vod.back': 'All categories',
+  'vod.noPlot': 'No description from the provider.',
   'rp.buffering': 'Loading stream…', 'rp.error': 'This channel could not be played.', 'rp.retry': 'Try again', 'rp.details': 'Details',
   'rp.codec': 'It uses a video or audio format the built-in player cannot decode yet. A stronger player engine is planned.',
   'rp.other': 'The provider did not deliver the stream. Check that no other device is using your only connection, then try again.',
   'fav.title': 'Favorites', 'fav.empty': 'Tap the star on a channel to add it here.', 'fav.hint': 'Drag to reorder, or use the arrows. With the keyboard: Alt + ↑ / ↓.',
   'fav.up': 'Move up', 'fav.down': 'Move down', 'fav.drag': 'Drag to reorder',
   'real.noPlaylist': 'No playlist yet', 'real.noPlaylistLead': 'Add your provider to see your channels here.',
-  'real.sample': 'Sample content. Movies, series, replay and the guide will load from your provider in an upcoming update. Your real channels are under Live TV.',
+  'real.sample': 'Sample content. Replay and the guide will load from your provider in an upcoming update. Your real channels are under Live TV.',
   'real.playSoon': 'Playback arrives in the next update', 'real.channels': 'channels', 'real.searchCh': 'Search your channels',
   'real.groups': 'Groups', 'real.loadMore': 'Load more', 'real.noMatch': 'No channels match', 'real.openLive': 'Open Live TV',
   'pl.edit': 'Edit', 'pl.confirmRemove': 'Tap again to remove', 'pl.refreshing': 'Refreshing…', 'pl.keepPass': 'Unchanged',
@@ -74,13 +78,17 @@ const en: Dict = {
 };
 
 const ar: Dict = {
+  'vod.recent': 'أُضيف حديثًا', 'vod.seeAll': 'عرض الكل', 'vod.search.movie': 'ابحث في الأفلام', 'vod.search.series': 'ابحث في المسلسلات',
+  'vod.empty': 'لا شيء هنا بعد', 'vod.emptyLead': 'ليس لدى مزوّدك عناوين في هذا القسم، أو فشل التحميل.', 'vod.loading': 'جارٍ تحميل مكتبتك…',
+  'vod.play': 'تشغيل', 'vod.season': 'الموسم', 'vod.episode': 'الحلقة', 'vod.episodes': 'الحلقات', 'vod.nextEp': 'الحلقة التالية', 'vod.titles': 'عنوان', 'vod.error': 'تعذّر التحميل', 'vod.retry': 'حاول مرة أخرى', 'vod.back': 'كل التصنيفات',
+  'vod.noPlot': 'لا يوجد وصف من المزوّد.',
   'rp.buffering': 'جارٍ تحميل البث…', 'rp.error': 'تعذّر تشغيل هذه القناة.', 'rp.retry': 'حاول مرة أخرى', 'rp.details': 'التفاصيل',
   'rp.codec': 'تستخدم صيغة صورة أو صوت لا يستطيع المشغّل المدمج فكّها بعد. يجري التخطيط لمحرك تشغيل أقوى.',
   'rp.other': 'لم يرسل المزوّد البث. تأكد أن جهازًا آخر لا يستخدم اتصالك الوحيد، ثم حاول مرة أخرى.',
   'fav.title': 'المفضلة', 'fav.empty': 'اضغط على نجمة أي قناة لتضيفها هنا.', 'fav.hint': 'اسحب لإعادة الترتيب أو استخدم الأسهم. بلوحة المفاتيح: Alt + ↑ / ↓.',
   'fav.up': 'تحريك لأعلى', 'fav.down': 'تحريك لأسفل', 'fav.drag': 'اسحب لإعادة الترتيب',
   'real.noPlaylist': 'لا توجد قائمة بعد', 'real.noPlaylistLead': 'أضف مزوّد الخدمة لتظهر قنواتك هنا.',
-  'real.sample': 'محتوى تجريبي. الأفلام والمسلسلات والإعادة والدليل ستُحمَّل من مزوّدك في تحديث قادم. قنواتك الحقيقية في قسم البث المباشر.',
+  'real.sample': 'محتوى تجريبي. الإعادة والدليل ستُحمَّل من مزوّدك في تحديث قادم. قنواتك الحقيقية في قسم البث المباشر.',
   'real.playSoon': 'التشغيل يصل في التحديث القادم', 'real.channels': 'قناة', 'real.searchCh': 'ابحث في قنواتك',
   'real.groups': 'المجموعات', 'real.loadMore': 'عرض المزيد', 'real.noMatch': 'لا توجد قنوات مطابقة', 'real.openLive': 'افتح البث المباشر',
   'pl.edit': 'تعديل', 'pl.confirmRemove': 'اضغط مرة أخرى للحذف', 'pl.refreshing': 'جارٍ التحديث…', 'pl.keepPass': 'بدون تغيير',
