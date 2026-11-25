@@ -1,3 +1,5 @@
+mod hq;
+
 use serde::Serialize;
 use std::sync::Arc;
 use tally_core::library::{Library, PlaylistMeta, Secrets};
@@ -79,6 +81,7 @@ struct RegistryDto {
 struct GroupDto {
     name: String,
     count: i64,
+    hidden: bool,
 }
 
 #[derive(Serialize)]
@@ -91,11 +94,12 @@ struct ChannelDto {
     logo: String,
     number: Option<i64>,
     fav: bool,
+    hidden: bool,
 }
 
 impl From<ChannelRow> for ChannelDto {
     fn from(c: ChannelRow) -> Self {
-        Self { id: c.id, tvg_id: c.tvg_id, name: c.name, group: c.group, logo: c.logo, number: c.number, fav: c.fav }
+        Self { id: c.id, tvg_id: c.tvg_id, name: c.name, group: c.group, logo: c.logo, number: c.number, fav: c.fav, hidden: c.hidden }
     }
 }
 
@@ -160,10 +164,10 @@ async fn playlist_activate(lib: Lib<'_>, id: String) -> std::result::Result<(), 
 }
 
 #[tauri::command]
-async fn live_groups(lib: Lib<'_>) -> std::result::Result<Vec<GroupDto>, String> {
+async fn live_groups(lib: Lib<'_>, show_hidden: Option<bool>) -> std::result::Result<Vec<GroupDto>, String> {
     let lib = lib.inner().clone();
     blocking(move || match lib.active_store()? {
-        Some(s) => Ok(s.groups()?.into_iter().map(|(name, count)| GroupDto { name, count }).collect()),
+        Some(s) => Ok(s.groups_ex(show_hidden.unwrap_or(false))?.into_iter().map(|(name, count, hidden)| GroupDto { name, count, hidden }).collect()),
         None => Ok(Vec::new()),
     })
     .await
@@ -196,6 +200,58 @@ async fn live_channels(
         };
         let next = if rows.len() == limit { rows.last().and_then(|c| c.number.map(|n| (n, c.id))) } else { None };
         Ok(ChannelPage { rows: rows.into_iter().map(Into::into).collect(), next })
+    })
+    .await
+}
+
+/// Channels in a chosen order (`provider`, `az`, `mine`), paged by offset.
+#[tauri::command]
+async fn live_channels_sorted(lib: Lib<'_>, group: Option<String>, mode: String, show_hidden: bool, offset: usize, limit: usize) -> std::result::Result<Vec<ChannelDto>, String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let Some(store) = lib.active_store()? else { return Ok(Vec::new()) };
+        let rows = store.channels_sorted(group.as_deref().filter(|g| !g.is_empty()), &mode, show_hidden, offset, limit.clamp(1, 6000))?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reorder_channels(lib: Lib<'_>, ids: Vec<i64>) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(mut s) => s.reorder_channels(&ids),
+        None => Ok(()),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_hidden(lib: Lib<'_>, id: i64, hidden: bool) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(s) => s.set_hidden(id, hidden),
+        None => Ok(()),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reorder_groups(lib: Lib<'_>, names: Vec<String>) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(mut s) => s.reorder_groups(&names),
+        None => Ok(()),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_group_hidden(lib: Lib<'_>, name: String, hidden: bool) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(s) => s.set_group_hidden(&name, hidden),
+        None => Ok(()),
     })
     .await
 }
@@ -371,6 +427,31 @@ async fn play_title(lib: Lib<'_>, proxy: State<'_, Proxy>, kind: String, id: Str
     .await
 }
 
+// ---- high-quality player (libmpv)
+
+#[tauri::command]
+fn hq_available(hq: State<'_, Arc<hq::Hq>>) -> bool {
+    hq.available()
+}
+
+#[tauri::command]
+fn hq_play(
+    app: tauri::AppHandle,
+    hq: State<'_, Arc<hq::Hq>>,
+    lib: Lib<'_>,
+    proxy: State<'_, Proxy>,
+    items: Vec<hq::Item>,
+    index: usize,
+    options: hq::Options,
+) -> std::result::Result<(), String> {
+    hq.inner().play(&app, lib.inner(), proxy.inner(), items, index, options).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn hq_stop(hq: State<'_, Arc<hq::Hq>>) {
+    hq.stop();
+}
+
 #[tauri::command]
 async fn live_favorites(lib: Lib<'_>) -> std::result::Result<Vec<ChannelDto>, String> {
     let lib = lib.inner().clone();
@@ -402,6 +483,19 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             app.manage(Arc::new(Library::new(dir, Box::new(Keychain))));
             app.manage(Proxy::start().map_err(|e| e.to_string())?);
+            // the player library may sit next to the app or in its resources
+            let mut dirs = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(d) = exe.parent() {
+                    dirs.push(d.to_path_buf());
+                    dirs.push(d.join("resources"));
+                }
+            }
+            if let Ok(r) = app.path().resource_dir() {
+                dirs.push(r.clone());
+                dirs.push(r.join("resources"));
+            }
+            app.manage(Arc::new(hq::Hq::new(dirs)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -412,9 +506,17 @@ pub fn run() {
             playlist_activate,
             live_groups,
             live_channels,
+            live_channels_sorted,
+            reorder_channels,
+            set_hidden,
+            reorder_groups,
+            set_group_hidden,
             set_favorite,
             play_channel,
             diagnose_channel,
+            hq_available,
+            hq_play,
+            hq_stop,
             title_rows,
             title_page,
             series_detail,

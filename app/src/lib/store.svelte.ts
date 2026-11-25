@@ -21,7 +21,7 @@ export const ui = $state({
   multiFocus: 0,
   detail: null as string | null,
   hidden: { live: [] as string[], movies: [] as string[], series: [] as string[] },
-  settings: { format: 'ts', hw: true, buffer: 'balanced', subSize: 'medium', parental: false },
+  settings: { format: 'ts', hw: true, buffer: 'balanced', engine: 'auto', quality: 'high', subSize: 'medium', parental: false },
   toast: '',
   activePlaylist: 1,
 });

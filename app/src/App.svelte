@@ -3,7 +3,7 @@
   import TopBar from './components/TopBar.svelte';
   import Player from './components/Player.svelte';
   import Search from './components/Search.svelte';
-  import RealPlayer from './components/RealPlayer.svelte';
+  import PlayerHost from './components/PlayerHost.svelte';
   import Home from './views/Home.svelte';
   import Live from './views/Live.svelte';
   import Browse from './views/Browse.svelte';
@@ -75,7 +75,7 @@
 
 {#if ui.searchOpen}<Search />{/if}
 {#if ui.playing}<Player />{/if}
-{#if ui.rplay}<RealPlayer />{/if}
+{#if ui.rplay}<PlayerHost />{/if}
 {#if ui.toast}<div class="toast" role="status">{ui.toast}</div>{/if}
 
 <style>

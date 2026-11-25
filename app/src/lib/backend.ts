@@ -16,9 +16,9 @@ export type PlaylistInfo = {
   updatedAt: number;
 };
 export type Registry = { active: string | null; items: PlaylistInfo[] };
-export type Group = { name: string; count: number };
+export type Group = { name: string; count: number; hidden: boolean };
 export type VodRef = { kind: 'movie' | 'episode'; id: string; ext: string };
-export type Chan = { id: number; tvgId: string; name: string; group: string; logo: string; number: number | null; fav: boolean; vod?: VodRef };
+export type Chan = { id: number; tvgId: string; name: string; group: string; logo: string; number: number | null; fav: boolean; hidden?: boolean; vod?: VodRef };
 export type TitleItem = { kind: 'movie' | 'series'; id: string; name: string; group: string; poster: string; plot: string; rating: number; year: string; ext: string };
 export type Shelf = { name: string; recent: boolean; count: number; items: TitleItem[] };
 export type EpisodeItem = { id: string; season: number; number: number; title: string; plot: string; duration: string; ext: string };
@@ -36,10 +36,19 @@ export const api = {
   refresh: (id: string) => call<PlaylistInfo>('playlist_refresh', { id }),
   remove: (id: string) => call<void>('playlist_remove', { id }),
   activate: (id: string) => call<void>('playlist_activate', { id }),
-  groups: () => call<Group[]>('live_groups'),
+  groups: (showHidden = false) => call<Group[]>('live_groups', { showHidden }),
+  channelsSorted: (a: { group: string | null; mode: string; showHidden: boolean; offset: number; limit: number }) => call<Chan[]>('live_channels_sorted', a),
+  reorderChannels: (ids: number[]) => call<void>('reorder_channels', { ids }),
+  setHidden: (id: number, hidden: boolean) => call<void>('set_hidden', { id, hidden }),
+  reorderGroups: (names: string[]) => call<void>('reorder_groups', { names }),
+  setGroupHidden: (name: string, hidden: boolean) => call<void>('set_group_hidden', { name, hidden }),
   channels: (a: { group: string | null; query: string | null; after: [number, number] | null; limit: number }) => call<ChanPage>('live_channels', a),
   diagnose: (id: number) => call<string>('diagnose_channel', { id }),
   play: (id: number) => call<{ url: string }>('play_channel', { id }),
+  hqAvailable: () => call<boolean>('hq_available'),
+  hqPlay: (items: { name: string; liveId: number | null; vod: VodRef | null }[], index: number, options: { quality: string; bufferSecs: number; fullscreen: boolean }) =>
+    call<void>('hq_play', { items, index, options }),
+  hqStop: () => call<void>('hq_stop'),
   shelves: (kind: string, perRow: number, maxRows: number) => call<Shelf[]>('title_rows', { kind, perRow, maxRows }),
   titles: (a: { kind: string; group: string | null; query: string | null; offset: number; limit: number }) => call<TitleItem[]>('title_page', a),
   series: (id: string) => call<SeriesInfo>('series_detail', { id }),
@@ -55,4 +64,15 @@ export function expiry(epoch: number | null): { date: string; days: number } | n
   const d = new Date(epoch * 1000);
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   return { date, days: Math.floor((epoch * 1000 - Date.now()) / 86_400_000) };
+}
+
+/** Events from the high-quality player window. Returns a function that stops listening. */
+export async function onHq(handlers: { closed?: () => void; index?: (i: number) => void; error?: (m: string) => void }): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event');
+  const offs = await Promise.all([
+    listen('hq-closed', () => handlers.closed?.()),
+    listen<number>('hq-index', (e) => handlers.index?.(e.payload)),
+    listen<string>('hq-error', (e) => handlers.error?.(e.payload)),
+  ]);
+  return () => offs.forEach((f) => f());
 }

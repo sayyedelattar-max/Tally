@@ -105,6 +105,22 @@
         <button class:on={!ui.settings.hw} onclick={() => (ui.settings.hw = false)}>{t('common.off')}</button>
       </div>
     </SettingRow>
+    {#if inApp}
+      <SettingRow label={t('set.engine')} desc={t('set.engineDesc')}>
+        <div class="seg" role="group" aria-label={t('set.engine')}>
+          {#each ['auto', 'hq', 'builtin'] as e}
+            <button class:on={ui.settings.engine === e} onclick={() => (ui.settings.engine = e)}>{t('set.engine.' + e)}</button>
+          {/each}
+        </div>
+      </SettingRow>
+      <SettingRow label={t('set.quality')} desc={t('set.qualityDesc')}>
+        <div class="seg" role="group" aria-label={t('set.quality')}>
+          {#each ['standard', 'high', 'ultra'] as q}
+            <button class:on={ui.settings.quality === q} onclick={() => (ui.settings.quality = q)}>{t('set.quality.' + q)}</button>
+          {/each}
+        </div>
+      </SettingRow>
+    {/if}
     <SettingRow label={t('set.buffer')} desc={t('set.bufferDesc')}>
       <div class="seg" role="group" aria-label={t('set.buffer')}>
         {#each ['low', 'balanced', 'stable'] as b}

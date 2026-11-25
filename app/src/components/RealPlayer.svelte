@@ -15,6 +15,13 @@
   let full = $state(false);
   let idleTimer: ReturnType<typeof setTimeout>;
   let ts: ReturnType<typeof mpegts.createPlayer> | null = null;
+  // How the picture meets the window: whole picture (black bars if the shapes differ), fill (crop edges), or stretch.
+  const FITS = ['contain', 'cover', 'fill'] as const;
+  let fit = $state<(typeof FITS)[number]>((() => { try { const v = localStorage.getItem('tally.fit'); return (FITS as readonly string[]).includes(v ?? '') ? (v as (typeof FITS)[number]) : 'contain'; } catch { return 'contain'; } })());
+  function cycleFit() {
+    fit = FITS[(FITS.indexOf(fit) + 1) % FITS.length];
+    try { localStorage.setItem('tally.fit', fit); } catch {}
+  }
   let tsRetries = 0;
   let report = $state('');
   let diagBusy = $state(false);
@@ -160,6 +167,7 @@
     else if ((k === 'ArrowDown' && !isVod) || k === 'PageDown') zap(1);
     else if (k === 'm') mute();
     else if (k === 'f') fullscreen();
+    else if (k === 'z') cycleFit();
     else return;
     e.preventDefault();
   }
@@ -171,6 +179,7 @@
 <div class="rp" class:idle bind:this={root} role="dialog" aria-label={cur.name} tabindex="-1" onmousemove={wake} ondblclick={fullscreen} data-overlay>
   <!-- svelte-ignore a11y_media_has_caption -->
   <video
+    style:object-fit={fit}
     bind:this={video}
     playsinline
     onplaying={() => { status = 'playing'; paused = false; }}
@@ -223,6 +232,7 @@
     <button class="rb" onclick={() => zap(1)} aria-label={t('player.nextCh')}><Icon name="next" size={22} /></button>
     <span class="sp"></span>
     <button class="rb" onclick={mute} aria-label={muted ? t('player.unmute') : t('player.mute')} aria-pressed={muted}><Icon name="volume" size={22} /></button>
+    <button class="rb fitb" onclick={cycleFit} title={t('rp.fit')}>{t('rp.fit.' + fit)}</button>
     <button class="rb" onclick={fullscreen} aria-label={t('player.fullscreen')} aria-pressed={full}><Icon name="expand" size={22} /></button>
   </div>
 </div>
@@ -230,6 +240,7 @@
 <style>
   .rp { position: fixed; inset: 0; z-index: 60; background: #000; color: #fff; display: grid; }
   .rp.idle { cursor: none; }
+  .fitb { width: auto; padding-inline: 12px; font-size: 13px; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; }
   .top, .bottom { position: absolute; inset-inline: 0; display: flex; align-items: center; gap: 10px; padding: 18px 24px; background: rgba(0, 0, 0, 0.55); transition: opacity 0.2s; }
   .top { top: 0; }

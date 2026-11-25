@@ -11,6 +11,7 @@ pub mod error;
 pub mod library;
 pub mod m3u;
 pub mod model;
+pub mod mpv;
 pub mod norm;
 pub mod proxy;
 pub mod store;

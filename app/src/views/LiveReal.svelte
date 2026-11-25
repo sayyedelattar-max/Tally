@@ -12,6 +12,12 @@
   let q = $state('');
   let rows = $state<Chan[]>([]);
   let next = $state<[number, number] | null>(null);
+  let soff = $state<number | null>(null); // where the next page starts when the list is sorted by us
+  type Mode = 'provider' | 'az' | 'mine';
+  let mode = $state<Mode>((() => { try { const v = localStorage.getItem('tally.sort'); return v === 'az' || v === 'mine' ? v : 'provider'; } catch { return 'provider'; } })());
+  let showHidden = $state(false);
+  let editGroups = $state(false);
+  const hasMore = $derived(next !== null || soff !== null);
   let loading = $state(false);
   let error = $state('');
   let sentinel: HTMLElement | undefined = $state();
@@ -37,8 +43,20 @@
         const needle = q.trim().toLowerCase();
         rows = needle ? all.filter((c) => c.name.toLowerCase().includes(needle)) : all;
         next = null;
+        soff = null;
         return;
       }
+      if (!q.trim() && (mode !== 'provider' || showHidden)) {
+        // our own ordering: a category in "my order" is loaded whole so it can be rearranged
+        const limit = mode === 'mine' && group ? 6000 : PAGE;
+        const page = await api.channelsSorted({ group: group || null, mode, showHidden, offset: reset ? 0 : rows.length, limit });
+        if (mine !== ticket) return;
+        rows = reset ? page : [...rows, ...page];
+        soff = page.length === limit ? rows.length : null;
+        next = null;
+        return;
+      }
+      soff = null;
       const page = await api.channels({ group: group || null, query: q.trim() || null, after: reset ? null : next, limit: PAGE });
       if (mine !== ticket) return;
       rows = reset ? page.rows : [...rows, ...page.rows];
@@ -66,6 +84,8 @@
   $effect(() => {
     group;
     q;
+    mode;
+    showHidden;
     if (first) {
       first = false;
       return;
@@ -79,7 +99,7 @@
   $effect(() => {
     if (!sentinel) return;
     const io = new IntersectionObserver((e) => {
-      if (e[0].isIntersecting && next && !loading) load(false);
+      if (e[0].isIntersecting && hasMore && !loading) load(false);
     }, { rootMargin: '600px' });
     io.observe(sentinel);
     return () => io.disconnect();
@@ -99,12 +119,64 @@
     }
   }
 
+  function setMode(m: Mode) {
+    mode = m;
+    try { localStorage.setItem('tally.sort', m); } catch {}
+  }
+
+  async function hide(c: Chan) {
+    const v = !c.hidden;
+    c.hidden = v;
+    try {
+      await api.setHidden(c.id, v);
+      if (v && !showHidden) {
+        rows = rows.filter((x) => x.id !== c.id);
+        toast(t('ord.hiddenToast'));
+      }
+      groups = await api.groups(showHidden || editGroups);
+    } catch (e) {
+      c.hidden = !v;
+      toast(String(e));
+    }
+  }
+
+  async function reloadGroups() {
+    try { groups = await api.groups(showHidden || editGroups); } catch (e) { error = String(e); }
+  }
+  $effect(() => {
+    showHidden;
+    editGroups;
+    if (!first) reloadGroups();
+  });
+
+  async function moveGroup(i: number, d: number) {
+    const j = i + d;
+    if (j < 0 || j >= groups.length) return;
+    const copy = [...groups];
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+    groups = copy;
+    try { await api.reorderGroups(copy.map((g) => g.name)); } catch (e) { toast(String(e)); reloadGroups(); }
+  }
+
+  async function hideGroup(g: Group) {
+    const v = !g.hidden;
+    g.hidden = v;
+    try {
+      await api.setGroupHidden(g.name, v);
+      if (v && group === g.name) group = '';
+      if (v && !(showHidden || editGroups)) groups = groups.filter((x) => x.name !== g.name);
+    } catch (e) {
+      g.hidden = !v;
+      toast(String(e));
+    }
+  }
+
   function open(i: number) {
     ui.rplay = { list: [...rows], index: i };
   }
 
   // ---- the user's own order of favourites
-  const canSort = $derived(inFav && !q.trim());
+  const canSort = $derived(!q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
 
   async function place(from: number, to: number) {
     if (from === to || to < 0 || to >= rows.length) return;
@@ -113,7 +185,7 @@
     copy.splice(to, 0, moved);
     rows = copy;
     try {
-      await api.reorder(copy.map((c) => c.id));
+      await (inFav ? api.reorder(copy.map((c) => c.id)) : api.reorderChannels(copy.map((c) => c.id)));
     } catch (e) {
       toast(String(e));
       load(true);
@@ -155,9 +227,17 @@
     <aside class="groups" aria-label={t('real.groups')}>
       <button class="g" class:on={inFav} onclick={() => (group = FAV)}><span class="gn"><Icon name="star" size={15} filled /> {t('fav.title')}</span><span class="mono muted">{favCount}</span></button>
       <button class="g" class:on={group === ''} onclick={() => (group = '')}><span>{t('common.all')}</span><span class="mono muted">{total}</span></button>
-      {#each groups as g (g.name)}
-        <button class="g" class:on={group === g.name} onclick={() => (group = g.name)}><span class="gn">{g.name || '—'}</span><span class="mono muted">{g.count}</span></button>
+      {#each groups as g, gi (g.name)}
+        <div class="grow" class:dim={g.hidden}>
+          <button class="g" class:on={group === g.name} onclick={() => (group = g.name)}><span class="gn">{g.name || '—'}</span><span class="mono muted">{g.count}</span></button>
+          {#if editGroups}
+            <button class="mv sm" disabled={gi === 0} aria-label={t('fav.up')} onclick={() => moveGroup(gi, -1)}><span class="up"><Icon name="down" size={16} /></span></button>
+            <button class="mv sm" disabled={gi === groups.length - 1} aria-label={t('fav.down')} onclick={() => moveGroup(gi, 1)}><Icon name="down" size={16} /></button>
+            <button class="mv sm" aria-pressed={g.hidden} aria-label={g.hidden ? t('ord.showGroup') : t('ord.hideGroup')} title={g.hidden ? t('ord.showGroup') : t('ord.hideGroup')} onclick={() => hideGroup(g)}><Icon name="eyeoff" size={16} /></button>
+          {/if}
+        </div>
       {/each}
+      <button class="btn editg" aria-pressed={editGroups} onclick={() => (editGroups = !editGroups)}><Icon name="sliders" size={16} /> {editGroups ? t('ord.doneGroups') : t('ord.editGroups')}</button>
     </aside>
 
     <section class="list">
@@ -166,6 +246,18 @@
         <input bind:value={q} placeholder={t('real.searchCh')} aria-label={t('real.searchCh')} autocomplete="off" />
       </label>
 
+      {#if !inFav}
+        <div class="tools">
+          <div class="seg" role="group" aria-label={t('ord.sort')}>
+            {#each ['provider', 'az', 'mine'] as m}
+              <button class:on={mode === m} onclick={() => setMode(m as Mode)}>{t('ord.' + m)}</button>
+            {/each}
+          </div>
+          <button class="btn" aria-pressed={showHidden} class:on={showHidden} onclick={() => (showHidden = !showHidden)}>{t('ord.showHidden')}</button>
+        </div>
+        {#if mode === 'mine' && group === '' && !q.trim()}<p class="hint muted">{t('ord.pickGroup')}</p>{/if}
+      {/if}
+
       {#if error}<p class="err" role="alert">{error}</p>{/if}
 
       {#if canSort && rows.length > 1}<p class="hint muted">{t('fav.hint')}</p>{/if}
@@ -173,6 +265,7 @@
         {#each rows as c, i (c.id)}
           {@const a = artFor(c.name)}
           <li
+            class:dim={c.hidden}
             class:drag={dragId === c.id}
             class:over={overId === c.id && dragId !== c.id}
             draggable={canSort}
@@ -194,13 +287,14 @@
               <button class="mv" disabled={i === 0} aria-label={t('fav.up')} onclick={() => nudge(i, -1)}><span class="up"><Icon name="down" size={18} /></span></button>
               <button class="mv" disabled={i === rows.length - 1} aria-label={t('fav.down')} onclick={() => nudge(i, 1)}><Icon name="down" size={18} /></button>
             {/if}
+            {#if !inFav}<button class="mv" aria-pressed={!!c.hidden} aria-label={c.hidden ? t('ord.unhide') : t('ord.hide')} title={c.hidden ? t('ord.unhide') : t('ord.hide')} onclick={() => hide(c)}><Icon name="eyeoff" size={18} /></button>{/if}
             <button class="star" class:on={c.fav} aria-pressed={c.fav} aria-label={t('live.favorite')} onclick={() => fav(c)}><Icon name="star" size={18} filled={c.fav} /></button>
           </li>
         {/each}
       </ul>
 
       {#if !rows.length && !loading && !error}<p class="empty">{inFav && !q.trim() ? t('fav.empty') : t('real.noMatch')}</p>{/if}
-      <div bind:this={sentinel} class="end mono muted">{#if loading}…{:else if next}<button class="btn" onclick={() => load(false)}>{t('real.loadMore')}</button>{/if}</div>
+      <div bind:this={sentinel} class="end mono muted">{#if loading}…{:else if hasMore}<button class="btn" onclick={() => load(false)}>{t('real.loadMore')}</button>{/if}</div>
     </section>
   </div>
 {/if}
@@ -233,6 +327,13 @@
   .star:hover { background: var(--surface-2); color: var(--text); }
   .star.on { color: var(--accent); }
   .hint { margin: 0 0 8px; font-size: 13px; }
+  .tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .grow { display: flex; align-items: center; }
+  .grow .g { flex: 1; min-width: 0; }
+  .dim { opacity: 0.45; }
+  .mv.sm { width: 30px; height: 36px; }
+  .editg { margin-top: 10px; align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }
+  .btn.on { border-color: var(--accent); color: var(--text); }
   li.drag { opacity: 0.4; }
   li.over { box-shadow: 0 -2px 0 var(--accent); }
   li[draggable='true'] { cursor: grab; }

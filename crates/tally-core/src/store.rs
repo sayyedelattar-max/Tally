@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS channels(
   number INTEGER,
   fav INTEGER NOT NULL DEFAULT 0,
   fav_pos INTEGER NOT NULL DEFAULT 0,
+  user_pos INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0,
   gen INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS titles(
@@ -36,6 +38,9 @@ CREATE TABLE IF NOT EXISTS titles(
     rating REAL NOT NULL DEFAULT 0, year TEXT NOT NULL DEFAULT '', added INTEGER NOT NULL DEFAULT 0,
     ext TEXT NOT NULL DEFAULT '',
     UNIQUE(kind, ext_id)
+);
+CREATE TABLE IF NOT EXISTS group_prefs(
+    grp TEXT PRIMARY KEY, pos INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS titles_kind_grp ON titles(kind, grp, id);
 CREATE INDEX IF NOT EXISTS titles_kind_added ON titles(kind, added DESC);
@@ -59,7 +64,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS programme_fts
   USING fts5(title_norm, content='programmes', content_rowid='id', tokenize='trigram');
 ";
 
-const CH_COLS: &str = "id, tvg_id, name, grp, logo, url, number, fav";
+const CH_COLS: &str = "id, tvg_id, name, grp, logo, url, number, fav, hidden";
 const PR_COLS: &str = "id, channel, start, stop, title, descr";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +77,8 @@ pub struct ChannelRow {
     pub url: String,
     pub number: Option<i64>,
     pub fav: bool,
+    /// Hidden by the user (still in the playlist).
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +117,7 @@ fn channel_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChannelRow> {
         url: r.get(5)?,
         number: r.get(6)?,
         fav: r.get::<_, i64>(7)? != 0,
+        hidden: r.get::<_, i64>(8).unwrap_or(0) != 0,
     })
 }
 
@@ -145,6 +153,15 @@ impl Store {
             .exists([])?;
         if !has_pos {
             conn.execute_batch("ALTER TABLE channels ADD COLUMN fav_pos INTEGER NOT NULL DEFAULT 0;")?;
+        }
+        for (col, ddl) in [
+            ("user_pos", "ALTER TABLE channels ADD COLUMN user_pos INTEGER NOT NULL DEFAULT 0;"),
+            ("hidden", "ALTER TABLE channels ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;"),
+        ] {
+            let has = conn.prepare(&format!("SELECT 1 FROM pragma_table_info('channels') WHERE name = '{col}'"))?.exists([])?;
+            if !has {
+                conn.execute_batch(ddl)?;
+            }
         }
         Ok(Self { conn })
     }
@@ -320,7 +337,7 @@ impl Store {
     pub fn channels_after(&self, cursor: Option<(i64, i64)>, limit: usize) -> Result<Vec<ChannelRow>> {
         let (n, id) = cursor.unwrap_or((i64::MIN, i64::MIN));
         let sql = format!(
-            "SELECT {CH_COLS} FROM channels WHERE (number, id) > (?1, ?2)
+            "SELECT {CH_COLS} FROM channels WHERE hidden = 0 AND (number, id) > (?1, ?2)
              ORDER BY number, id LIMIT ?3"
         );
         let mut st = self.conn.prepare_cached(&sql)?;
@@ -328,20 +345,86 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
-    /// Channel groups with their sizes, largest first (the category chips).
+    /// Channel groups with their sizes, in the user's order (then largest first). Hidden groups and
+    /// hidden channels are left out.
     pub fn groups(&self) -> Result<Vec<(String, i64)>> {
-        let mut st = self
-            .conn
-            .prepare_cached("SELECT grp, COUNT(*) AS n FROM channels GROUP BY grp ORDER BY n DESC, grp")?;
-        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(self.groups_ex(false)?.into_iter().map(|(g, n, _)| (g, n)).collect())
+    }
+
+    /// Same, optionally including what the user hid; the flag says whether the group itself is hidden.
+    pub fn groups_ex(&self, show_hidden: bool) -> Result<Vec<(String, i64, bool)>> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT c.grp, SUM(CASE WHEN ?1 = 1 OR c.hidden = 0 THEN 1 ELSE 0 END) AS n, COALESCE(p.hidden, 0)
+             FROM channels c LEFT JOIN group_prefs p ON p.grp = c.grp
+             WHERE ?1 = 1 OR COALESCE(p.hidden, 0) = 0
+             GROUP BY c.grp HAVING n > 0
+             ORDER BY (COALESCE(p.pos, 0) = 0), COALESCE(p.pos, 0), n DESC, c.grp",
+        )?;
+        let rows = st.query_map([show_hidden as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)? != 0)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Save the order of the groups exactly as given (the first is shown first).
+    pub fn reorder_groups(&mut self, names: &[String]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        for (i, g) in names.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO group_prefs(grp, pos) VALUES (?1, ?2) ON CONFLICT(grp) DO UPDATE SET pos = excluded.pos",
+                params![g, i as i64 + 1],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn set_group_hidden(&self, name: &str, hidden: bool) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO group_prefs(grp, hidden) VALUES (?1, ?2) ON CONFLICT(grp) DO UPDATE SET hidden = excluded.hidden",
+            params![name, hidden as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_hidden(&self, id: i64, hidden: bool) -> Result<()> {
+        self.conn.execute("UPDATE channels SET hidden = ?2 WHERE id = ?1", params![id, hidden as i64])?;
+        Ok(())
+    }
+
+    /// Browse in a chosen order: `provider` (the provider's numbering), `az`, or `mine` (the user's own
+    /// order inside a group; channels never placed come after the placed ones). Offset paging.
+    pub fn channels_sorted(&self, group: Option<&str>, mode: &str, show_hidden: bool, offset: usize, limit: usize) -> Result<Vec<ChannelRow>> {
+        let order = match mode {
+            "az" => "name_norm, id",
+            "mine" => "(user_pos = 0), user_pos, number, id",
+            _ => "number, id",
+        };
+        let sql = format!(
+            "SELECT {CH_COLS} FROM channels WHERE (?1 IS NULL OR grp = ?1) AND (?2 = 1 OR hidden = 0)
+             ORDER BY {order} LIMIT ?3 OFFSET ?4"
+        );
+        let mut st = self.conn.prepare_cached(&sql)?;
+        let rows = st.query_map(params![group, show_hidden as i64, limit as i64, offset as i64], channel_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Remember the user's order for the given channels (the first is shown first).
+    pub fn reorder_channels(&mut self, ids: &[i64]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut up = tx.prepare("UPDATE channels SET user_pos = ?2 WHERE id = ?1")?;
+            for (i, id) in ids.iter().enumerate() {
+                up.execute(params![id, i as i64 + 1])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Like [`Store::channels_after`], limited to one group.
     pub fn channels_in_group_after(&self, group: &str, cursor: Option<(i64, i64)>, limit: usize) -> Result<Vec<ChannelRow>> {
         let (n, id) = cursor.unwrap_or((i64::MIN, i64::MIN));
         let sql = format!(
-            "SELECT {CH_COLS} FROM channels WHERE grp = ?1 AND (number, id) > (?2, ?3)
+            "SELECT {CH_COLS} FROM channels WHERE hidden = 0 AND grp = ?1 AND (number, id) > (?2, ?3)
              ORDER BY number, id LIMIT ?4"
         );
         let mut st = self.conn.prepare_cached(&sql)?;
@@ -659,6 +742,35 @@ mod tests {
         st.import_titles("movie", vec![mk("7", "Solo", "X", 1)]).unwrap();
         assert_eq!(st.title_count("series").unwrap(), 1);
         assert_eq!(st.title("movie", "7").unwrap().unwrap().name, "Solo");
+    }
+
+    #[test]
+    fn own_order_and_hiding_survive_a_refresh() {
+        let mut st = Store::open_memory().unwrap();
+        let mk = |k: &str, n: &str, g: &str| Channel { key: k.into(), name: n.into(), group: g.into(), url: format!("http://x/{k}"), ..Default::default() };
+        let all = || vec![mk("a", "Alpha", "News"), mk("b", "Bravo", "News"), mk("c", "Charlie", "News"), mk("d", "Delta", "Sport"), mk("e", "Echo", "Kids")];
+        st.import_channels(all()).unwrap();
+        let ids = |st: &Store, mode: &str, hid: bool| st.channels_sorted(Some("News"), mode, hid, 0, 50).unwrap().into_iter().map(|c| c.name).collect::<Vec<_>>();
+        assert_eq!(ids(&st, "provider", false), ["Alpha", "Bravo", "Charlie"]);
+        // own order: Charlie, Alpha, Bravo
+        let news: Vec<i64> = st.channels_sorted(Some("News"), "provider", false, 0, 50).unwrap().iter().map(|c| c.id).collect();
+        st.reorder_channels(&[news[2], news[0], news[1]]).unwrap();
+        assert_eq!(ids(&st, "mine", false), ["Charlie", "Alpha", "Bravo"]);
+        assert_eq!(ids(&st, "az", false), ["Alpha", "Bravo", "Charlie"]);
+        st.set_hidden(news[0], true).unwrap();
+        assert_eq!(ids(&st, "mine", false), ["Charlie", "Bravo"]);
+        assert_eq!(ids(&st, "mine", true), ["Charlie", "Alpha", "Bravo"]);
+        assert_eq!(st.channels_in_group_after("News", None, 10).unwrap().len(), 2);
+        // groups: own order, hiding, counts without hidden channels
+        assert_eq!(st.groups().unwrap(), vec![("News".to_string(), 2), ("Kids".to_string(), 1), ("Sport".to_string(), 1)]);
+        st.reorder_groups(&["Sport".to_string(), "Kids".to_string(), "News".to_string()]).unwrap();
+        st.set_group_hidden("Kids", true).unwrap();
+        assert_eq!(st.groups().unwrap().iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), ["Sport", "News"]);
+        assert_eq!(st.groups_ex(true).unwrap().len(), 3);
+        // a refresh keeps all of it
+        st.import_channels(all()).unwrap();
+        assert_eq!(ids(&st, "mine", false), ["Charlie", "Bravo"]);
+        assert_eq!(st.groups().unwrap().iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), ["Sport", "News"]);
     }
 
     #[test]
