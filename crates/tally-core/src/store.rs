@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS titles(
     ext TEXT NOT NULL DEFAULT '',
     UNIQUE(kind, ext_id)
 );
+CREATE TABLE IF NOT EXISTS watched(
+    kind TEXT NOT NULL, ref TEXT NOT NULL, ts INTEGER NOT NULL,
+    PRIMARY KEY(kind, ref)
+);
 CREATE TABLE IF NOT EXISTS group_prefs(
     grp TEXT PRIMARY KEY, pos INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0
 );
@@ -240,6 +244,23 @@ impl Store {
         let sql = format!("SELECT {} FROM titles WHERE kind = ?1 AND norm LIKE ?2 ORDER BY id LIMIT ?3", Self::TITLE_COLS);
         let mut st = self.conn.prepare(&sql)?;
         let rows = st.query_map(params![kind, like, limit as i64], Self::title_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Remember that `refid` (a channel id, or a movie / series id) was just opened.
+    pub fn record_watch(&self, kind: &str, refid: &str) -> Result<()> {
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO watched(kind, ref, ts) VALUES(?1, ?2, ?3) ON CONFLICT(kind, ref) DO UPDATE SET ts = excluded.ts",
+            params![kind, refid, ts],
+        )?;
+        Ok(())
+    }
+
+    /// Most recently opened first.
+    pub fn recent_watched(&self, kind: &str, limit: usize) -> Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT ref FROM watched WHERE kind = ?1 ORDER BY ts DESC LIMIT ?2")?;
+        let rows = st.query_map(params![kind, limit as i64], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
@@ -923,5 +944,15 @@ mod tests {
         assert_eq!(s.guide_window("hn", 90, 210).unwrap().len(), 3);
         // programme search
         assert_eq!(s.search("long tab", 10).unwrap().programmes.len(), 1);
+    }
+
+    #[test]
+    fn watched_remembers_latest_first() {
+        let st = Store::open_memory().unwrap();
+        st.record_watch("live", "5").unwrap();
+        st.record_watch("live", "7").unwrap();
+        st.record_watch("live", "5").unwrap();
+        assert_eq!(st.recent_watched("live", 10).unwrap(), vec!["5", "7"]);
+        assert!(st.recent_watched("movie", 10).unwrap().is_empty());
     }
 }

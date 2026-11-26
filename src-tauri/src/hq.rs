@@ -242,7 +242,7 @@ fn configure(m: &Mpv, o: &Options) -> Result<()> {
         ("force-window", "yes".into()),
         ("idle", "yes".into()),
         ("keep-open", "no".into()),
-        ("title", "Tally".into()),
+        ("title", "Elara IPTV".into()),
         ("autofit", "70%".into()),
         ("fullscreen", if o.fullscreen { "yes" } else { "no" }.into()),
         ("hwdec", "auto-safe".into()),

@@ -453,6 +453,68 @@ fn hq_stop(hq: State<'_, Arc<hq::Hq>>) {
 }
 
 #[tauri::command]
+async fn record_watch(lib: Lib<'_>, kind: String, id: String) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(s) => s.record_watch(&kind, &id),
+        None => Ok(()),
+    })
+    .await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HomeDto {
+    last_live: Option<ChannelDto>,
+    recent_live: Vec<ChannelDto>,
+    favorites: Vec<ChannelDto>,
+    continue_titles: Vec<TitleDto>,
+    new_movies: Vec<TitleDto>,
+    new_series: Vec<TitleDto>,
+    live_count: i64,
+    movie_count: i64,
+    series_count: i64,
+}
+
+/// Everything the Home launcher shows, in one call. Never downloads: empty shelves just stay empty.
+#[tauri::command]
+async fn home_data(lib: Lib<'_>, proxy: State<'_, Proxy>) -> std::result::Result<HomeDto, String> {
+    let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
+    blocking(move || {
+        let Some(s) = lib.active_store()? else {
+            return Ok(HomeDto { last_live: None, recent_live: vec![], favorites: vec![], continue_titles: vec![], new_movies: vec![], new_series: vec![], live_count: 0, movie_count: 0, series_count: 0 });
+        };
+        let mut recent_live: Vec<ChannelDto> = Vec::new();
+        for r in s.recent_watched("live", 12)? {
+            if let Ok(id) = r.parse::<i64>() {
+                if let Some(c) = s.channel_by_id(id)? { recent_live.push(c.into()); }
+            }
+        }
+        let last_live = recent_live.first().map(|c| ChannelDto { id: c.id, tvg_id: c.tvg_id.clone(), name: c.name.clone(), group: c.group.clone(), logo: c.logo.clone(), number: c.number, fav: c.fav, hidden: c.hidden });
+        let mut cont: Vec<(String, String)> = Vec::new();
+        for kind in ["movie", "series"] {
+            for r in s.recent_watched(kind, 12)? { cont.push((kind.to_string(), r)); }
+        }
+        let mut continue_titles = Vec::new();
+        for (k, id) in cont {
+            if let Some(t) = s.title(&k, &id)? { continue_titles.push(title_dto(t, &proxy)); }
+        }
+        Ok(HomeDto {
+            last_live,
+            recent_live: recent_live.into_iter().skip(1).collect(),
+            favorites: s.favorites()?.into_iter().take(14).map(Into::into).collect(),
+            continue_titles,
+            new_movies: s.titles_recent("movie", 14)?.into_iter().map(|t| title_dto(t, &proxy)).collect(),
+            new_series: s.titles_recent("series", 14)?.into_iter().map(|t| title_dto(t, &proxy)).collect(),
+            live_count: s.channel_count()?,
+            movie_count: s.title_count("movie")?,
+            series_count: s.title_count("series")?,
+        })
+    })
+    .await
+}
+
+#[tauri::command]
 async fn live_favorites(lib: Lib<'_>) -> std::result::Result<Vec<ChannelDto>, String> {
     let lib = lib.inner().clone();
     blocking(move || match lib.active_store()? {
@@ -499,6 +561,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            record_watch,
+            home_data,
             playlists_list,
             playlist_save,
             playlist_refresh,
@@ -526,5 +590,5 @@ pub fn run() {
             core_version
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Tally");
+        .expect("error while running Elara IPTV");
 }

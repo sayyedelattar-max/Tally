@@ -23,6 +23,7 @@ export type TitleItem = { kind: 'movie' | 'series'; id: string; name: string; gr
 export type Shelf = { name: string; recent: boolean; count: number; items: TitleItem[] };
 export type EpisodeItem = { id: string; season: number; number: number; title: string; plot: string; duration: string; ext: string };
 export type SeriesInfo = { name: string; plot: string; episodes: EpisodeItem[] };
+export type HomeData = { lastLive: Chan | null; recentLive: Chan[]; favorites: Chan[]; continueTitles: TitleItem[]; newMovies: TitleItem[]; newSeries: TitleItem[]; liveCount: number; movieCount: number; seriesCount: number };
 export type ChanPage = { rows: Chan[]; next: [number, number] | null };
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -53,6 +54,8 @@ export const api = {
   titles: (a: { kind: string; group: string | null; query: string | null; offset: number; limit: number }) => call<TitleItem[]>('title_page', a),
   series: (id: string) => call<SeriesInfo>('series_detail', { id }),
   playTitle: (v: VodRef) => call<{ url: string }>('play_title', { kind: v.kind, id: v.id, ext: v.ext }),
+  recordWatch: (kind: 'live' | 'movie' | 'series', id: string) => call<void>('record_watch', { kind, id }),
+  home: () => call<HomeData>('home_data'),
   favorites: () => call<Chan[]>('live_favorites'),
   reorder: (ids: number[]) => call<void>('reorder_favorites', { ids }),
   setFavorite: (id: number, fav: boolean) => call<void>('set_favorite', { id, fav }),

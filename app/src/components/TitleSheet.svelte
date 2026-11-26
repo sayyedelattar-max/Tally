@@ -33,10 +33,12 @@
   const pad = (n: number) => String(n).padStart(2, '0');
 
   function playMovie() {
+    api.recordWatch('movie', item.id).catch(() => {});
     ui.rplay = { list: [chan(item.name, item.year, { kind: 'movie', id: item.id, ext: item.ext })], index: 0 };
   }
   function playEpisode(e: EpisodeItem) {
     if (!info) return;
+    api.recordWatch('series', item.id).catch(() => {});
     const list = info.episodes.map((x) => chan(`${item.name} · S${pad(x.season)}E${pad(x.number)}${x.title ? ' · ' + x.title : ''}`, item.name, { kind: 'episode', id: x.id, ext: x.ext }));
     ui.rplay = { list, index: info.episodes.indexOf(e) };
   }

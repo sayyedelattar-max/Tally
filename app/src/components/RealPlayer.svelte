@@ -83,6 +83,7 @@
     report = '';
     time = 0;
     dur = 0;
+    if (!again && !c.vod && c.id) api.recordWatch('live', String(c.id)).catch(() => {});
     const mine = ++ticket;
     stop();
     status = 'loading';

@@ -1,4 +1,4 @@
-# TALLY (working name)
+# Elara IPTV
 
 An original IPTV player, built to compete with IBO Player and IPTV Smarters Pro.
 Windows first; the Rust core is written to be reused by a native Apple client later.

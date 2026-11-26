@@ -1,2 +1,3 @@
-/** One place for the product name. "TALLY" is a working codename; check trademarks before shipping. */
-export const BRAND = 'TALLY';
+/** One place for the product name. "Elara" is the working name; run a trademark check before shipping. */
+export const BRAND = 'ELARA';
+export const BRAND_SUFFIX = 'IPTV';

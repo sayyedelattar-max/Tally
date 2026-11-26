@@ -1,10 +1,10 @@
 <script lang="ts">
   import Rail from './components/Rail.svelte';
-  import TopBar from './components/TopBar.svelte';
   import Player from './components/Player.svelte';
   import Search from './components/Search.svelte';
   import PlayerHost from './components/PlayerHost.svelte';
   import Home from './views/Home.svelte';
+  import HomeReal from './views/HomeReal.svelte';
   import Live from './views/Live.svelte';
   import Browse from './views/Browse.svelte';
   import Replay from './views/Replay.svelte';
@@ -22,7 +22,7 @@
     loadRegistry().catch(() => {});
   });
 
-  const sample = $derived(inApp && ['home', 'replay'].includes(ui.view));
+  const sample = $derived(inApp && ['replay'].includes(ui.view));
 
   $effect(() => {
     const el = document.documentElement;
@@ -58,12 +58,11 @@
 <svelte:window onkeydown={onkey} />
 
 <div class="app">
-  <Rail />
   <div class="main-col">
-    <TopBar />
+    <Rail />
     <main id="main" class="main">
       {#if sample}<p class="sample mono" role="note">{t('real.sample')}</p>{/if}
-      {#if ui.view === 'home'}<Home />
+      {#if ui.view === 'home'}{#if inApp}<HomeReal />{:else}<Home />{/if}
       {:else if ui.view === 'live'}{#if inApp}<LiveReal />{:else}<Live />{/if}
       {:else if ui.view === 'movies' || ui.view === 'series'}{#if inApp}{#key ui.view}<TitlesReal kind={ui.view === 'movies' ? 'movie' : 'series'} />{/key}{:else}<Browse kind={ui.view === 'movies' ? 'movie' : 'series'} />{/if}
       {:else if ui.view === 'replay'}<Replay />

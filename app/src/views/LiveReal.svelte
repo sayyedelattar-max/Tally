@@ -149,6 +149,19 @@
     if (!first) reloadGroups();
   });
 
+  let gDrag = $state<string | null>(null);
+  let gOver = $state<string | null>(null);
+  async function dropGroup(to: number) {
+    const from = groups.findIndex((g) => g.name === gDrag);
+    gDrag = gOver = null;
+    if (from < 0 || from === to) return;
+    const copy = [...groups];
+    const [m] = copy.splice(from, 1);
+    copy.splice(to, 0, m);
+    groups = copy;
+    try { await api.reorderGroups(copy.map((g) => g.name)); } catch (e) { toast(String(e)); reloadGroups(); }
+  }
+
   async function moveGroup(i: number, d: number) {
     const j = i + d;
     if (j < 0 || j >= groups.length) return;
@@ -225,10 +238,20 @@
 {:else}
   <div class="wrap">
     <aside class="groups" aria-label={t('real.groups')}>
+      <div class="ghead"><b>{t('real.groups')}</b><button class="btn editg" class:on={editGroups} aria-pressed={editGroups} onclick={() => (editGroups = !editGroups)}><Icon name="sliders" size={16} /> {editGroups ? t('ord.doneGroups') : t('ord.editGroups')}</button></div>
+      {#if editGroups}<p class="hint muted">{t('ord.groupsHint')}</p>{/if}
       <button class="g" class:on={inFav} onclick={() => (group = FAV)}><span class="gn"><Icon name="star" size={15} filled /> {t('fav.title')}</span><span class="mono muted">{favCount}</span></button>
       <button class="g" class:on={group === ''} onclick={() => (group = '')}><span>{t('common.all')}</span><span class="mono muted">{total}</span></button>
       {#each groups as g, gi (g.name)}
-        <div class="grow" class:dim={g.hidden}>
+        <div class="grow" class:dim={g.hidden} class:gover={gOver === g.name && gDrag !== g.name} class:gdrag={gDrag === g.name}
+          draggable={editGroups}
+          role="group"
+          ondragstart={(e) => { gDrag = g.name; e.dataTransfer?.setData('text/plain', g.name); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'; }}
+          ondragover={(e) => { if (editGroups && gDrag !== null) { e.preventDefault(); gOver = g.name; } }}
+          ondragend={() => (gDrag = gOver = null)}
+          ondrop={(e) => { e.preventDefault(); dropGroup(gi); }}
+        >
+          {#if editGroups}<span class="grip" aria-hidden="true"><Icon name="grid" size={16} /></span>{/if}
           <button class="g" class:on={group === g.name} onclick={() => (group = g.name)}><span class="gn">{g.name || '—'}</span><span class="mono muted">{g.count}</span></button>
           {#if editGroups}
             <button class="mv sm" disabled={gi === 0} aria-label={t('fav.up')} onclick={() => moveGroup(gi, -1)}><span class="up"><Icon name="down" size={16} /></span></button>
@@ -237,7 +260,6 @@
           {/if}
         </div>
       {/each}
-      <button class="btn editg" aria-pressed={editGroups} onclick={() => (editGroups = !editGroups)}><Icon name="sliders" size={16} /> {editGroups ? t('ord.doneGroups') : t('ord.editGroups')}</button>
     </aside>
 
     <section class="list">
@@ -276,7 +298,7 @@
           >
             {#if canSort}<span class="grip" title={t('fav.drag')} aria-hidden="true"><Icon name="grid" size={18} /></span>{/if}
             <button class="row" data-row={c.id} onclick={() => open(i)} onkeydown={(e) => rowKey(e, i)}>
-              <span class="num mono">{canSort ? i + 1 : (c.number ?? '')}</span>
+              <span class="num mono">{i + 1}</span>
               <span class="logo" style="background:{a.bg};color:{a.ink}">
                 {#if c.logo}<img src={c.logo} alt="" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
                 <b>{initials(c.name)}</b>
@@ -332,7 +354,11 @@
   .grow .g { flex: 1; min-width: 0; }
   .dim { opacity: 0.45; }
   .mv.sm { width: 30px; height: 36px; }
-  .editg { margin-top: 10px; align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }
+  .ghead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; position: sticky; top: 0; background: var(--bg); padding-block: 4px; z-index: 1; }
+  .gover { box-shadow: 0 -2px 0 var(--accent); }
+  .gdrag { opacity: 0.4; }
+  .grow[draggable='true'] { cursor: grab; }
+  .editg { align-self: flex-start; display: inline-flex; gap: 6px; align-items: center; }
   .btn.on { border-color: var(--accent); color: var(--text); }
   li.drag { opacity: 0.4; }
   li.over { box-shadow: 0 -2px 0 var(--accent); }

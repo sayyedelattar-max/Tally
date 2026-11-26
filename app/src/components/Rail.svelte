@@ -1,131 +1,62 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { ui, t, go, openSearch } from '../lib/store.svelte';
-  import { BRAND } from '../lib/brand';
+  import { BRAND, BRAND_SUFFIX } from '../lib/brand';
+  import { inApp } from '../lib/backend';
+  import { clock, TODAY } from '../lib/mock';
   import type { View } from '../lib/types';
 
-  const items: { view: View | 'search'; icon: string; key: string }[] = [
-    { view: 'home', icon: 'home', key: 'nav.home' },
-    { view: 'live', icon: 'tv', key: 'nav.live' },
-    { view: 'movies', icon: 'film', key: 'nav.movies' },
-    { view: 'series', icon: 'layers', key: 'nav.series' },
-    { view: 'replay', icon: 'replay', key: 'nav.replay' },
-    { view: 'playlists', icon: 'list', key: 'nav.playlists' },
-    { view: 'search', icon: 'search', key: 'nav.search' },
-    { view: 'settings', icon: 'sliders', key: 'nav.settings' },
+  const tabs: { view: View; key: string }[] = [
+    { view: 'home', key: 'nav.home' },
+    { view: 'live', key: 'nav.live' },
+    { view: 'movies', key: 'nav.movies' },
+    { view: 'series', key: 'nav.series' },
+    { view: 'replay', key: 'nav.replay' },
+    { view: 'playlists', key: 'nav.playlists' },
   ];
 
-  function pick(v: View | 'search') {
-    if (v === 'search') openSearch();
-    else go(v);
-  }
+  let tick = $state(Date.now());
+  $effect(() => {
+    if (!inApp) return;
+    const i = setInterval(() => (tick = Date.now()), 15_000);
+    return () => clearInterval(i);
+  });
+  const now = $derived(inApp ? new Date(tick) : TODAY);
+  const hhmm = $derived(inApp ? `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}` : clock(0));
 </script>
 
-<nav class="rail" aria-label="Main">
-  <div class="brand"><span class="dot"></span><span class="display">{BRAND}</span></div>
-  <ul>
-    {#each items as it}
-      <li>
-        <button class="item" class:on={ui.view === it.view} aria-current={ui.view === it.view ? 'page' : undefined} onclick={() => pick(it.view)}>
-          <Icon name={it.icon} size={24} />
-          <span>{t(it.key)}</span>
-        </button>
-      </li>
+<header class="bar-top">
+  <div class="brand"><b>{BRAND.charAt(0) + BRAND.slice(1).toLowerCase()}</b><span>{BRAND_SUFFIX}</span></div>
+  <nav aria-label="Main" class="tabs">
+    {#each tabs as it}
+      <button class="tab" class:on={ui.view === it.view} aria-current={ui.view === it.view ? 'page' : undefined} onclick={() => go(it.view)}>{t(it.key)}</button>
     {/each}
-  </ul>
-</nav>
+  </nav>
+  <div class="tools">
+    <span class="clock ltr">{hhmm}</span>
+    <button class="ico" onclick={openSearch} aria-label={t('nav.search')} title="{t('nav.search')} (Ctrl K)"><Icon name="search" size={20} /></button>
+    <button class="ico" class:on={ui.view === 'settings'} onclick={() => go('settings')} aria-label={t('nav.settings')} title={t('nav.settings')}><Icon name="sliders" size={20} /></button>
+    <button class="ico lang" onclick={() => (ui.lang = ui.lang === 'ar' ? 'en' : 'ar')} aria-label={t('top.langAria')}>{ui.lang === 'ar' ? 'EN' : 'ع'}</button>
+  </div>
+</header>
 
 <style>
-  .rail {
-    background: var(--surface);
-    border-inline-end: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow-y: auto;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 26px 0 20px;
-    font-size: 24px;
-  }
-  ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .item {
-    position: relative;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 14px 4px;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 500;
-    text-align: center;
-    transition: color 0.12s, background 0.12s;
-  }
-  .item:hover {
-    color: var(--text);
-    background: var(--surface-2);
-  }
-  .item.on {
-    color: var(--text);
-    background: var(--surface-2);
-  }
-  .item.on::before {
-    content: '';
-    position: absolute;
-    inset-inline-start: 0;
-    top: 10px;
-    bottom: 10px;
-    width: 3px;
-    background: var(--accent);
-    border-radius: 0 3px 3px 0;
-  }
-  :global([dir='rtl']) .item.on::before {
-    border-radius: 3px 0 0 3px;
-  }
-  .item:focus-visible {
-    outline-offset: -3px;
-  }
-  @media (max-width: 760px) {
-    .rail {
-      flex-direction: row;
-      border-inline-end: 0;
-      border-top: 1px solid var(--line);
-      overflow-x: auto;
-      overflow-y: hidden;
-    }
-    .brand {
-      display: none;
-    }
-    ul {
-      flex-direction: row;
-      width: 100%;
-    }
-    li {
-      flex: 1 0 64px;
-    }
-    .item {
-      padding: 10px 2px;
-      font-size: 11px;
-    }
-    .item.on::before {
-      inset-inline: 12px;
-      top: 0;
-      bottom: auto;
-      width: auto;
-      height: 3px;
-      border-radius: 0 0 3px 3px;
-    }
+  .bar-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 14px 32px; position: relative; z-index: 5; }
+  .brand { display: flex; align-items: baseline; gap: 6px; }
+  .brand b { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .brand span { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: var(--muted); }
+  .tabs { display: flex; gap: 2px; padding: 4px; border-radius: 999px; background: color-mix(in srgb, var(--text) 7%, transparent); backdrop-filter: blur(20px); }
+  .tab { padding: 8px 18px; border-radius: 999px; font-size: 15px; font-weight: 500; color: var(--muted); white-space: nowrap; transition: background 0.15s, color 0.15s; }
+  .tab:hover { color: var(--text); }
+  .tab.on { background: color-mix(in srgb, var(--text) 16%, transparent); color: var(--text); font-weight: 600; }
+  .tab:focus-visible, .ico:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .tools { display: flex; align-items: center; gap: 4px; justify-self: end; }
+  .clock { font-size: 14px; font-weight: 500; color: var(--muted); margin-inline-end: 10px; font-variant-numeric: tabular-nums; }
+  .ico { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); font-size: 13px; font-weight: 600; }
+  .ico:hover, .ico.on { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--text); }
+  @media (max-width: 900px) {
+    .bar-top { grid-template-columns: 1fr auto; padding: 10px 16px; }
+    .tabs { grid-column: 1 / -1; grid-row: 2; overflow-x: auto; justify-self: stretch; }
+    .clock { display: none; }
   }
 </style>
