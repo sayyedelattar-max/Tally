@@ -206,12 +206,14 @@
     padding-top: 10px;
   }
   h2 {
-    font-size: 26px;
-    font-weight: 600;
-    margin-bottom: 4px;
-    letter-spacing: 0.03em;
-    color: var(--muted);
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 4px 12px;
+    color: var(--text);
   }
+  section > :global(.srow) { background: var(--surface); padding-inline: 22px; border-bottom: 1px solid var(--line); }
+  section > :global(h2 + .srow) { border-start-start-radius: 20px; border-start-end-radius: 20px; }
+  section > :global(.srow:last-child) { border-end-start-radius: 20px; border-end-end-radius: 20px; border-bottom: 0; }
   .err { color: var(--live); overflow-wrap: anywhere; }
   .hide {
     padding: 14px 0 6px;

@@ -96,8 +96,8 @@
   .none { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; padding: 40px 0; }
   .none h2 { font-size: 32px; }
   .cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px; }
-  .pc { display: flex; flex-direction: column; gap: 18px; padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); min-width: 0; }
-  .pc.act { border-color: var(--accent); }
+  .pc { display: flex; flex-direction: column; gap: 18px; padding: 24px; border: 0; border-radius: 22px; background: var(--surface); min-width: 0; }
+  .pc.act { box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 40%, transparent); }
   .top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
   h2 { font-size: 30px; font-weight: 600; overflow-wrap: anywhere; }
   .act-pill { color: var(--accent); }

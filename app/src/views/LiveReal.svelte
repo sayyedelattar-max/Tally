@@ -440,21 +440,22 @@
   .none h2 { font-size: 32px; }
   .wrap { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 24px; align-items: start; }
   .groups { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; max-height: calc(100dvh - 140px); overflow-y: auto; padding-inline-end: 6px; }
-  .g { display: flex; justify-content: space-between; gap: 10px; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 8px; text-align: start; }
+  .g { display: flex; justify-content: space-between; gap: 10px; align-items: center; min-height: 40px; padding: 0 14px; border-radius: 999px; text-align: start; }
   .gn { display: inline-flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .g:hover { background: var(--surface-2); }
-  .g.on { background: var(--surface-3); color: var(--text); box-shadow: inset 3px 0 0 var(--accent); }
+  .g.on { background: color-mix(in srgb, var(--text) 16%, transparent); color: var(--text); font-weight: 600; }
   :global([dir='rtl']) .g.on { box-shadow: inset -3px 0 0 var(--accent); }
   .find { margin-bottom: 12px; max-width: 520px; }
   .find input { flex: 1; min-width: 0; background: none; border: 0; color: var(--text); font-size: 16px; height: 100%; }
   .find input:focus-visible { outline: none; }
   .err { color: var(--live); overflow-wrap: anywhere; }
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  li { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
-  .row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; min-height: 60px; padding: 6px 8px; text-align: start; border-radius: 8px; }
-  .row:hover { background: var(--surface-2); }
+  li { display: flex; align-items: center; border-radius: 16px; transition: background 0.15s; }
+  li:hover, li:focus-within { background: color-mix(in srgb, var(--text) 7%, transparent); }
+  .row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; min-height: 64px; padding: 6px 10px; text-align: start; border-radius: 16px; }
+  .row:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
   .num { width: 44px; text-align: end; color: var(--muted); flex: none; }
-  .logo { position: relative; flex: none; width: 52px; height: 36px; border-radius: 6px; overflow: hidden; display: grid; place-items: center; font-size: 13px; }
+  .logo { position: relative; flex: none; width: 56px; height: 38px; border-radius: 9px; overflow: hidden; display: grid; place-items: center; font-size: 13px; }
   .logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; padding: 3px; }
   .nm { display: flex; flex-direction: column; min-width: 0; }
   .nm b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -15,11 +15,11 @@
   --accent: #f4f4f0;
   --on-accent: #0e0f11;
   --live: #ef5b5b;
-  --radius: 10px;
+  --radius: 14px;
   --rail: 96px;
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, 'IBM Plex Sans Arabic', sans-serif;
   --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, 'IBM Plex Sans Arabic', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-mono: var(--font-ui);
   color-scheme: dark;
 }
 [data-accent='teal'] { --accent: #4fc3a8; --on-accent: #06130f; }
@@ -46,7 +46,7 @@ input, select { font: inherit; color: inherit; }
 ::selection { background: var(--accent); color: var(--on-accent); }
 * { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
 
-.mono { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em; }
+.mono { font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .ltr { direction: ltr; unicode-bidi: isolate; display: inline-block; }
 .display { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; }
@@ -61,53 +61,57 @@ input, select { font: inherit; color: inherit; }
 }
 
 /* ---------- controls ---------- */
+/* Filled, borderless, pill-shaped: controls read as part of the surface, not as boxes on it. */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  min-height: 44px; padding: 0 18px; border: 1px solid var(--line-2); border-radius: var(--radius);
-  font-weight: 500; white-space: nowrap; transition: background 0.12s, border-color 0.12s, transform 0.12s;
+  min-height: 42px; padding: 0 20px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--text) 10%, transparent);
+  font-weight: 600; font-size: 14px; white-space: nowrap; transition: background 0.15s, transform 0.15s;
 }
-.btn:hover { background: var(--surface-3); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-.btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
-.btn.square { width: 44px; padding: 0; }
-.btn.on { background: var(--surface-3); border-color: var(--text); }
-.btn.danger:hover { border-color: var(--live); color: var(--live); }
+.btn:hover { background: color-mix(in srgb, var(--text) 17%, transparent); }
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.4; pointer-events: none; }
+.btn.primary { background: var(--text); color: var(--bg); }
+.btn.primary:hover { background: var(--text); filter: brightness(0.92); }
+.btn.square { width: 42px; padding: 0; }
+.btn.on { background: color-mix(in srgb, var(--text) 24%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 55%, transparent); }
+.btn.danger:hover { background: color-mix(in srgb, var(--live) 25%, transparent); color: var(--live); }
 
 .chip {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px;
-  border: 1px solid var(--line-2); border-radius: 999px; color: var(--muted); white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 16px;
+  border-radius: 999px; background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--muted); white-space: nowrap; font-weight: 500;
+  transition: background 0.15s, color 0.15s;
 }
-.chip:hover { color: var(--text); background: var(--surface-2); }
-.chip.on { background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 600; }
+.chip:hover { color: var(--text); background: color-mix(in srgb, var(--text) 14%, transparent); }
+.chip.on { background: var(--text); color: var(--bg); font-weight: 600; }
 .chips { display: flex; gap: 8px; overflow-x: auto; padding: 4px 4px 8px; margin-inline: -4px; }
 
-.seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--radius); overflow: hidden; }
-.seg button { min-height: 40px; padding: 0 16px; color: var(--muted); font-weight: 500; }
-.seg button + button { border-inline-start: 1px solid var(--line-2); }
-.seg button.on { background: var(--text); color: var(--bg); }
-.seg button:hover:not(.on) { background: var(--surface-2); color: var(--text); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.seg button { min-height: 36px; padding: 0 16px; border-radius: 999px; color: var(--muted); font-weight: 500; font-size: 14px; transition: background 0.15s, color 0.15s; }
+.seg button.on { background: color-mix(in srgb, var(--text) 18%, transparent); color: var(--text); font-weight: 600; }
+.seg button:hover:not(.on) { color: var(--text); }
 
 .field {
-  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px;
-  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius); color: var(--muted);
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 18px;
+  background: color-mix(in srgb, var(--text) 8%, transparent); border: 0; border-radius: 999px; color: var(--muted);
+  transition: background 0.15s, box-shadow 0.15s;
 }
 .field input { flex: 1; min-width: 0; background: none; border: 0; color: var(--text); }
 .field input::placeholder { color: var(--muted); }
-.field:focus-within { border-color: var(--accent); }
+.field:focus-within { background: color-mix(in srgb, var(--text) 13%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 45%, transparent); }
 .field input:focus-visible { outline: none; }
 
-.tag { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
+.tag { font-size: 12px; font-weight: 600; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--live); flex: none; }
-.pill { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border: 1px solid currentColor; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; opacity: 0.85; }
+.pill { display: inline-flex; align-items: center; min-height: 24px; padding: 0 10px; border-radius: 999px; background: color-mix(in srgb, var(--text) 14%, transparent); font-size: 12px; font-weight: 600; }
 .bar { height: 3px; background: color-mix(in srgb, currentColor 22%, transparent); border-radius: 2px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: currentColor; }
 
 /* ---------- cards ---------- */
-.card { display: flex; flex-direction: column; gap: 10px; border-radius: var(--radius); transition: transform 0.14s ease; }
+.card { display: flex; flex-direction: column; gap: 10px; border-radius: var(--radius); transition: transform 0.2s ease, box-shadow 0.2s ease; }
 .card .frame { position: relative; border-radius: var(--radius); overflow: hidden; }
-.card:hover, .card:focus-visible { transform: translateY(-3px); }
-.card:focus-visible { outline-offset: 4px; }
+.card:hover, .card:focus-visible { transform: scale(1.04); }
+.card:focus-visible { outline: none; }
+.card:hover .frame, .card:focus-visible .frame { box-shadow: 0 22px 40px -14px rgb(0 0 0 / 0.7); }
 .card .cap { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .card .cap b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .cap span { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

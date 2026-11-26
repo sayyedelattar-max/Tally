@@ -20,7 +20,6 @@
     gap: 24px;
     min-height: 68px;
     padding: 10px 0;
-    border-bottom: 1px solid var(--line);
     flex-wrap: wrap;
   }
   .txt {
