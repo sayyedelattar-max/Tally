@@ -216,6 +216,45 @@ async fn live_channels_sorted(lib: Lib<'_>, group: Option<String>, mode: String,
     .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VariantDto {
+    channel: ChannelDto,
+    label: String,
+    score: f64,
+    hevc: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MergedDto {
+    key: String,
+    name: String,
+    variants: Vec<VariantDto>,
+}
+
+/// One entry per channel, with its qualities folded in. Nothing is stored: the provider's list is untouched.
+#[tauri::command]
+async fn live_channels_merged(lib: Lib<'_>, group: Option<String>, query: Option<String>, show_hidden: bool) -> std::result::Result<Vec<MergedDto>, String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let Some(store) = lib.active_store()? else { return Ok(Vec::new()) };
+        let mut rows = store.channels_sorted(group.as_deref().filter(|g| !g.is_empty()), "provider", show_hidden, 0, 8000)?;
+        if let Some(q) = query.as_deref().map(|q| q.trim().to_lowercase()).filter(|q| !q.is_empty()) {
+            rows.retain(|c| c.name.to_lowercase().contains(&q));
+        }
+        Ok(tally_core::quality::merge(rows)
+            .into_iter()
+            .map(|m| MergedDto {
+                key: m.key,
+                name: m.name,
+                variants: m.variants.into_iter().map(|v| VariantDto { channel: v.channel.into(), label: v.label, score: v.score, hevc: v.hevc }).collect(),
+            })
+            .collect())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn reorder_channels(lib: Lib<'_>, ids: Vec<i64>) -> std::result::Result<(), String> {
     let lib = lib.inner().clone();
@@ -466,6 +505,10 @@ async fn record_watch(lib: Lib<'_>, kind: String, id: String) -> std::result::Re
 #[serde(rename_all = "camelCase")]
 struct HomeDto {
     last_live: Option<ChannelDto>,
+    now_title: String,
+    next_title: String,
+    now_stop: i64,
+    now_start: i64,
     recent_live: Vec<ChannelDto>,
     favorites: Vec<ChannelDto>,
     continue_titles: Vec<TitleDto>,
@@ -482,7 +525,7 @@ async fn home_data(lib: Lib<'_>, proxy: State<'_, Proxy>) -> std::result::Result
     let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
     blocking(move || {
         let Some(s) = lib.active_store()? else {
-            return Ok(HomeDto { last_live: None, recent_live: vec![], favorites: vec![], continue_titles: vec![], new_movies: vec![], new_series: vec![], live_count: 0, movie_count: 0, series_count: 0 });
+            return Ok(HomeDto { last_live: None, now_title: String::new(), next_title: String::new(), now_stop: 0, now_start: 0, recent_live: vec![], favorites: vec![], continue_titles: vec![], new_movies: vec![], new_series: vec![], live_count: 0, movie_count: 0, series_count: 0 });
         };
         let mut recent_live: Vec<ChannelDto> = Vec::new();
         for r in s.recent_watched("live", 12)? {
@@ -499,7 +542,17 @@ async fn home_data(lib: Lib<'_>, proxy: State<'_, Proxy>) -> std::result::Result
         for (k, id) in cont {
             if let Some(t) = s.title(&k, &id)? { continue_titles.push(title_dto(t, &proxy)); }
         }
+        let (mut now_title, mut next_title, mut now_start, mut now_stop) = (String::new(), String::new(), 0, 0);
+        if let Some(c) = &last_live {
+            if !c.tvg_id.is_empty() {
+                let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                let (n, x) = s.now_next(&c.tvg_id, t)?;
+                if let Some(n) = n.filter(|n| n.start <= t) { now_title = n.title; now_start = n.start; now_stop = n.stop; }
+                if let Some(x) = x { next_title = x.title; }
+            }
+        }
         Ok(HomeDto {
+            now_title, next_title, now_start, now_stop,
             last_live,
             recent_live: recent_live.into_iter().skip(1).collect(),
             favorites: s.favorites()?.into_iter().take(14).map(Into::into).collect(),
@@ -510,6 +563,92 @@ async fn home_data(lib: Lib<'_>, proxy: State<'_, Proxy>) -> std::result::Result
             movie_count: s.title_count("movie")?,
             series_count: s.title_count("series")?,
         })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn bulk_channels(lib: Lib<'_>, ids: Vec<i64>, action: String, group: Option<String>) -> std::result::Result<(), String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let Some(mut s) = lib.active_store()? else { return Ok(()) };
+        match action.as_str() {
+            "favorite" => s.set_favorites(&ids, true),
+            "unfavorite" => s.set_favorites(&ids, false),
+            "hide" => s.set_hidden_many(&ids, true),
+            "unhide" => s.set_hidden_many(&ids, false),
+            "move" => s.move_channels(&ids, group.as_deref().unwrap_or("")),
+            _ => Err(Error::Account("unknown action".into())),
+        }
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuideStatus {
+    count: i64,
+    newest: i64,
+}
+
+#[tauri::command]
+async fn guide_status(lib: Lib<'_>) -> std::result::Result<GuideStatus, String> {
+    let lib = lib.inner().clone();
+    blocking(move || match lib.active_store()? {
+        Some(s) => {
+            let (count, newest) = s.guide_info()?;
+            Ok(GuideStatus { count, newest })
+        }
+        None => Ok(GuideStatus { count: 0, newest: 0 }),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn guide_sync(lib: Lib<'_>) -> std::result::Result<usize, String> {
+    let lib = lib.inner().clone();
+    blocking(move || lib.sync_guide()).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgDto {
+    start: i64,
+    stop: i64,
+    title: String,
+    desc: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GuideRowDto {
+    channel: ChannelDto,
+    progs: Vec<ProgDto>,
+}
+
+/// Channels with their programmes between `from` and `to` (unix seconds).
+/// `source` is `fav`, `all` or `group:<name>`.
+#[tauri::command]
+async fn guide_rows(lib: Lib<'_>, source: String, from: i64, to: i64, offset: usize, limit: usize) -> std::result::Result<Vec<GuideRowDto>, String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let Some(s) = lib.active_store()? else { return Ok(Vec::new()) };
+        let (fav, group) = match source.as_str() {
+            "fav" => (true, None),
+            "all" => (false, None),
+            g => (false, g.strip_prefix("group:")),
+        };
+        let chans = s.guide_channels(fav, group, from, to, offset, limit.clamp(1, 200))?;
+        let mut out = Vec::new();
+        for c in chans {
+            let progs = s
+                .guide_window(&c.tvg_id, from, to)?
+                .into_iter()
+                .map(|p| ProgDto { start: p.start, stop: p.stop, title: p.title, desc: p.desc })
+                .collect();
+            out.push(GuideRowDto { channel: c.into(), progs });
+        }
+        Ok(out)
     })
     .await
 }
@@ -562,6 +701,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             record_watch,
+            bulk_channels,
+            guide_status,
+            guide_sync,
+            guide_rows,
             home_data,
             playlists_list,
             playlist_save,
@@ -571,6 +714,7 @@ pub fn run() {
             live_groups,
             live_channels,
             live_channels_sorted,
+            live_channels_merged,
             reorder_channels,
             set_hidden,
             reorder_groups,

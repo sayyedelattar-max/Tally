@@ -52,7 +52,11 @@
     <div class="hcopy">
       <span class="tagline"><i class="dot"></i> {t('hm.resume')}</span>
       <h3 class="display">{hero.name}</h3>
-      <p class="muted">{hero.group}</p>
+      {#if data?.lastLive && data.nowTitle}
+        <p class="np"><b>{data.nowTitle}</b></p>
+        <i class="hprog"><i style="width:{Math.min(100, Math.max(0, ((Date.now() / 1000 - data.nowStart) / Math.max(1, data.nowStop - data.nowStart)) * 100))}%"></i></i>
+        {#if data.nextTitle}<p class="muted">{t('hero.next')}: {data.nextTitle}</p>{/if}
+      {:else}<p class="muted">{hero.group}</p>{/if}
       <button class="btn primary big" onclick={() => playLive(heroList, 0)}><Icon name="play" filled size={20} /> {t('hm.play')}</button>
     </div>
   </section>
@@ -115,6 +119,9 @@
   .hcopy .muted { color: inherit; opacity: 0.75; margin: 0; }
   .tagline { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; display: inline-flex; gap: 8px; align-items: center; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
+  .np { font-size: 18px; margin: 0; }
+  .hprog { display: block; width: min(320px, 100%); height: 3px; border-radius: 2px; background: rgb(255 255 255 / 0.2); overflow: hidden; }
+  .hprog i { display: block; height: 100%; background: currentColor; }
   .big { padding: 14px 28px; border-radius: 999px; font-size: 17px; margin-top: 8px; display: inline-flex; gap: 8px; align-items: center; }
   .more { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; padding: 6px 10px; border-radius: 8px; }
   .more:hover { color: var(--text); background: var(--surface-2); }

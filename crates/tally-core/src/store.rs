@@ -68,7 +68,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS programme_fts
   USING fts5(title_norm, content='programmes', content_rowid='id', tokenize='trigram');
 ";
 
-const CH_COLS: &str = "id, tvg_id, name, grp, logo, url, number, fav, hidden";
+const CH_COLS: &str = "id, tvg_id, name, egrp, logo, url, number, fav, hidden";
 const PR_COLS: &str = "id, channel, start, stop, title, descr";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,8 +161,10 @@ impl Store {
         for (col, ddl) in [
             ("user_pos", "ALTER TABLE channels ADD COLUMN user_pos INTEGER NOT NULL DEFAULT 0;"),
             ("hidden", "ALTER TABLE channels ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;"),
+            ("user_grp", "ALTER TABLE channels ADD COLUMN user_grp TEXT NOT NULL DEFAULT '';"),
+            ("egrp", "ALTER TABLE channels ADD COLUMN egrp TEXT GENERATED ALWAYS AS (CASE WHEN user_grp <> '' THEN user_grp ELSE grp END) VIRTUAL;"),
         ] {
-            let has = conn.prepare(&format!("SELECT 1 FROM pragma_table_info('channels') WHERE name = '{col}'"))?.exists([])?;
+            let has = conn.prepare(&format!("SELECT 1 FROM pragma_table_xinfo('channels') WHERE name = '{col}'"))?.exists([])?;
             if !has {
                 conn.execute_batch(ddl)?;
             }
@@ -375,11 +377,11 @@ impl Store {
     /// Same, optionally including what the user hid; the flag says whether the group itself is hidden.
     pub fn groups_ex(&self, show_hidden: bool) -> Result<Vec<(String, i64, bool)>> {
         let mut st = self.conn.prepare_cached(
-            "SELECT c.grp, SUM(CASE WHEN ?1 = 1 OR c.hidden = 0 THEN 1 ELSE 0 END) AS n, COALESCE(p.hidden, 0)
-             FROM channels c LEFT JOIN group_prefs p ON p.grp = c.grp
+            "SELECT c.egrp, SUM(CASE WHEN ?1 = 1 OR c.hidden = 0 THEN 1 ELSE 0 END) AS n, COALESCE(p.hidden, 0)
+             FROM channels c LEFT JOIN group_prefs p ON p.grp = c.egrp
              WHERE ?1 = 1 OR COALESCE(p.hidden, 0) = 0
-             GROUP BY c.grp HAVING n > 0
-             ORDER BY (COALESCE(p.pos, 0) = 0), COALESCE(p.pos, 0), n DESC, c.grp",
+             GROUP BY c.egrp HAVING n > 0
+             ORDER BY (COALESCE(p.pos, 0) = 0), COALESCE(p.pos, 0), n DESC, c.egrp",
         )?;
         let rows = st.query_map([show_hidden as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)? != 0)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -420,7 +422,7 @@ impl Store {
             _ => "number, id",
         };
         let sql = format!(
-            "SELECT {CH_COLS} FROM channels WHERE (?1 IS NULL OR grp = ?1) AND (?2 = 1 OR hidden = 0)
+            "SELECT {CH_COLS} FROM channels WHERE (?1 IS NULL OR egrp = ?1) AND (?2 = 1 OR hidden = 0)
              ORDER BY {order} LIMIT ?3 OFFSET ?4"
         );
         let mut st = self.conn.prepare_cached(&sql)?;
@@ -445,11 +447,65 @@ impl Store {
     pub fn channels_in_group_after(&self, group: &str, cursor: Option<(i64, i64)>, limit: usize) -> Result<Vec<ChannelRow>> {
         let (n, id) = cursor.unwrap_or((i64::MIN, i64::MIN));
         let sql = format!(
-            "SELECT {CH_COLS} FROM channels WHERE hidden = 0 AND grp = ?1 AND (number, id) > (?2, ?3)
+            "SELECT {CH_COLS} FROM channels WHERE hidden = 0 AND egrp = ?1 AND (number, id) > (?2, ?3)
              ORDER BY number, id LIMIT ?4"
         );
         let mut st = self.conn.prepare_cached(&sql)?;
         let rows = st.query_map(params![group, n, id, limit as i64], channel_row)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Favourite or unfavourite many channels at once (new favourites go to the end, in the order given).
+    pub fn set_favorites(&mut self, ids: &[i64], fav: bool) -> Result<()> {
+        for id in ids {
+            self.set_favorite(*id, fav)?;
+        }
+        Ok(())
+    }
+
+    pub fn set_hidden_many(&mut self, ids: &[i64], hidden: bool) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut up = tx.prepare("UPDATE channels SET hidden = ?2 WHERE id = ?1")?;
+            for id in ids {
+                up.execute(params![id, hidden as i64])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Put channels into a category of the user's choosing; an empty name returns them to the provider's category.
+    /// Survives a playlist refresh.
+    pub fn move_channels(&mut self, ids: &[i64], group: &str) -> Result<()> {
+        let group = group.trim();
+        let tx = self.conn.transaction()?;
+        {
+            let mut up = tx.prepare("UPDATE channels SET user_grp = ?2 WHERE id = ?1")?;
+            for id in ids {
+                up.execute(params![id, group])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// What the guide holds: how many programmes and when the last one ends (0 when empty).
+    pub fn guide_info(&self) -> Result<(i64, i64)> {
+        Ok(self.conn.query_row("SELECT COUNT(*), COALESCE(MAX(stop), 0) FROM programmes", [], |r| Ok((r.get(0)?, r.get(1)?)))?)
+    }
+
+    /// Channels that have programmes in `[from, to)`: favourites (in the user's order), one category, or everything.
+    pub fn guide_channels(&self, favourites: bool, group: Option<&str>, from: i64, to: i64, offset: usize, limit: usize) -> Result<Vec<ChannelRow>> {
+        let order = if favourites { "fav_pos, id" } else { "(user_pos = 0), user_pos, number, id" };
+        let sql = format!(
+            "SELECT {CH_COLS} FROM channels c
+             WHERE hidden = 0 AND tvg_id <> '' AND (?1 = 0 OR fav = 1) AND (?2 IS NULL OR egrp = ?2)
+               AND EXISTS (SELECT 1 FROM programmes p WHERE p.channel = c.tvg_id AND p.stop > ?3 AND p.start < ?4)
+             ORDER BY {order} LIMIT ?5 OFFSET ?6"
+        );
+        let mut st = self.conn.prepare_cached(&sql)?;
+        let rows = st.query_map(params![favourites as i64, group, from, to, limit as i64, offset as i64], channel_row)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
@@ -582,7 +638,7 @@ impl Store {
         }
 
         let sql = format!(
-            "SELECT c.id, c.tvg_id, c.name, c.grp, c.logo, c.url, c.number, c.fav
+            "SELECT c.id, c.tvg_id, c.name, c.egrp, c.logo, c.url, c.number, c.fav, c.hidden
              FROM channel_fts f JOIN channels c ON c.id = f.rowid
              WHERE channel_fts MATCH ?1 ORDER BY rank LIMIT ?2"
         );
@@ -954,5 +1010,28 @@ mod tests {
         st.record_watch("live", "5").unwrap();
         assert_eq!(st.recent_watched("live", 10).unwrap(), vec!["5", "7"]);
         assert!(st.recent_watched("movie", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn bulk_actions_and_user_categories_survive_a_refresh() {
+        let mut st = Store::open_memory().unwrap();
+        let ch = |n: &str, g: &str, tvg: &str| Channel { name: n.into(), group: g.into(), url: format!("http://x/{n}"), tvg_id: tvg.into(), ..Default::default() };
+        st.import_channels(vec![ch("A", "News", "a"), ch("B", "News", "b"), ch("C", "Sport", "c")]).unwrap();
+        let ids: Vec<i64> = st.channels_sorted(None, "provider", true, 0, 10).unwrap().iter().map(|c| c.id).collect();
+        st.set_favorites(&ids[..2], true).unwrap();
+        assert_eq!(st.favorites().unwrap().len(), 2);
+        st.move_channels(&ids[..2], "Mine").unwrap();
+        st.set_hidden_many(&ids[2..], true).unwrap();
+        st.import_channels(vec![ch("A", "News", "a"), ch("B", "News", "b"), ch("C", "Sport", "c")]).unwrap();
+        let groups: Vec<String> = st.groups().unwrap().into_iter().map(|(g, _)| g).collect();
+        assert_eq!(groups, vec!["Mine"]);
+        assert_eq!(st.channels_sorted(Some("Mine"), "provider", false, 0, 10).unwrap().len(), 2);
+        st.move_channels(&ids[..2], "").unwrap();
+        assert!(st.groups().unwrap().iter().any(|(g, _)| g == "News"));
+        // guide channels need programmes
+        st.import_programmes(vec![Programme { channel: "a".into(), start: 0, stop: 100, title: "T".into(), desc: String::new() }]).unwrap();
+        assert_eq!(st.guide_channels(false, None, 10, 50, 0, 10).unwrap().len(), 1);
+        assert_eq!(st.guide_channels(true, None, 10, 50, 0, 10).unwrap().len(), 1);
+        assert_eq!(st.guide_info().unwrap(), (1, 100));
     }
 }

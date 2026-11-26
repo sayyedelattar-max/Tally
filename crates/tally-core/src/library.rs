@@ -208,6 +208,20 @@ impl Library {
         sync_titles_into(&client, &mut store)
     }
 
+    /// Download the programme guide and keep the part people look at: from 6 hours ago to 2 days ahead.
+    pub fn sync_guide(&self) -> Result<usize> {
+        let (Some(client), Some(mut store)) = (self.client()?, self.active_store()?) else { return Ok(0) };
+        let t = now();
+        let (from, to) = (t - 6 * 3600, t + 48 * 3600);
+        let mut keep = Vec::new();
+        client.guide(|p| {
+            if p.stop > from && p.start < to {
+                keep.push(p);
+            }
+        })?;
+        store.import_programmes(keep)
+    }
+
     /// The channel database of the active playlist, if there is one.
     pub fn active_store(&self) -> Result<Option<Store>> {
         match self.list()?.0 {

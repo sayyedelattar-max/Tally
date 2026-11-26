@@ -9,6 +9,7 @@
   const tabs: { view: View; key: string }[] = [
     { view: 'home', key: 'nav.home' },
     { view: 'live', key: 'nav.live' },
+    ...(inApp ? [{ view: 'guide' as View, key: 'nav.guide' }] : []),
     { view: 'movies', key: 'nav.movies' },
     { view: 'series', key: 'nav.series' },
     { view: 'replay', key: 'nav.replay' },

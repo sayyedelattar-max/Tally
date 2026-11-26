@@ -15,6 +15,7 @@ pub mod mpv;
 pub mod norm;
 pub mod proxy;
 pub mod store;
+pub mod quality;
 pub mod xmltv;
 pub mod xtream;
 

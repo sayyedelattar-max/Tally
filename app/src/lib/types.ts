@@ -1,5 +1,5 @@
 export type Lang = 'en' | 'ar';
-export type View = 'home' | 'live' | 'movies' | 'series' | 'replay' | 'playlists' | 'settings';
+export type View = 'home' | 'live' | 'guide' | 'movies' | 'series' | 'replay' | 'playlists' | 'settings';
 export type Accent = 'mono' | 'teal' | 'violet' | 'amber';
 
 /** Programme times are minutes relative to "now" (negative = already aired). */
