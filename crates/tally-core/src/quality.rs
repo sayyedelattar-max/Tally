@@ -23,10 +23,11 @@ pub struct Merged {
 
 fn bitrate(tok: &str) -> Option<f64> {
     // 512K, 2M, 4/8M, 8M
-    let (num, unit) = tok.split_at(tok.len().checked_sub(1)?);
-    let unit = match unit {
-        "M" => 1.0,
-        "K" => 0.001,
+    let last = tok.chars().next_back()?;
+    let num = &tok[..tok.len() - last.len_utf8()];
+    let unit = match last {
+        'M' => 1.0,
+        'K' => 0.001,
         _ => return None,
     };
     if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit() || c == '/') || num.starts_with('/') || num.ends_with('/') {
@@ -150,6 +151,13 @@ mod tests {
         let mbc = m.iter().find(|x| x.name == "MBC 4").unwrap();
         assert_eq!(mbc.variants.len(), 2);
         assert!(mbc.variants.iter().any(|v| v.label == "Standard"));
+    }
+
+    #[test]
+    fn arabic_and_other_non_ascii_names_do_not_panic() {
+        let m = merge(vec![ch(1, "قناة الجزيرة HD", "A"), ch(2, "الجزيرة مباشر", "A"), ch(3, "ى", "A"), ch(4, "قناة ى 4M", "A"), ch(5, "😀 HD", "A")]);
+        assert!(!m.is_empty());
+        assert_eq!(split("قناة الجزيرة HD").0, "قناة الجزيرة");
     }
 
     #[test]
