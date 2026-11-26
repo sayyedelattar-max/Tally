@@ -20,6 +20,25 @@ pub struct Item {
     pub name: String,
     pub live_id: Option<i64>,
     pub vod: Option<VodRef>,
+    /// The other qualities of this channel, best first.
+    #[serde(default)]
+    pub alts: Vec<AltItem>,
+    #[serde(default)]
+    pub alt: usize,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AltItem {
+    pub live_id: i64,
+    pub label: String,
+}
+
+impl Item {
+    /// The channel to play right now (the chosen quality, if there are several).
+    fn current_live(&self) -> Option<i64> {
+        self.alts.get(self.alt).map(|a| a.live_id).or(self.live_id)
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -105,7 +124,7 @@ impl Hq {
         for (key, msg) in [
             ("UP", "tally-up"), ("DOWN", "tally-down"), ("PGUP", "tally-prev"), ("PGDWN", "tally-next"),
             ("<", "tally-prev"), (">", "tally-next"), ("MBTN_BACK", "tally-prev"), ("MBTN_FORWARD", "tally-next"),
-            ("z", "tally-fit"), ("ESC", "tally-esc"),
+            ("z", "tally-fit"), ("q", "tally-quality"), ("ESC", "tally-esc"),
         ] {
             let _ = mpv.command(&["keybind", key, &format!("script-message {msg}")]);
         }
@@ -123,7 +142,7 @@ impl Hq {
                         let Some(name) = m.first() else { continue };
                         let live = {
                             let st = session.state.lock().unwrap();
-                            st.items[st.index].live_id.is_some()
+                            st.items[st.index].current_live().is_some()
                         };
                         match (name.as_str(), live) {
                             ("tally-prev", _) | ("tally-up", true) => step(&session, &lib, &proxy, &app, -1),
@@ -135,6 +154,7 @@ impl Hq {
                                 let _ = session.mpv.command(&["seek", "-60"]);
                             }
                             ("tally-fit", _) => cycle_fit(&session),
+                            ("tally-quality", _) => cycle_quality(&session, &lib, &proxy, &app, None),
                             ("tally-esc", _) => {
                                 if session.mpv.get("fullscreen").as_deref() == Some("yes") {
                                     let _ = session.mpv.set("fullscreen", "no");
@@ -148,7 +168,7 @@ impl Hq {
                     Event::EndFile { eof, error } => {
                         let (live, last, retries) = {
                             let st = session.state.lock().unwrap();
-                            (st.items[st.index].live_id.is_some(), st.index + 1 >= st.items.len(), st.retries)
+                            (st.items[st.index].current_live().is_some(), st.index + 1 >= st.items.len(), st.retries)
                         };
                         if live || error.is_some() {
                             // a hiccup on the way: start the same thing again a few times
@@ -157,6 +177,8 @@ impl Hq {
                                 let _ = session.mpv.command(&["show-text", "Reconnecting…", "2500"]);
                                 std::thread::sleep(Duration::from_millis(900 * (retries as u64 + 1)));
                                 let _ = load_current(&session, &lib, &proxy);
+                            } else if live && step_down(&session, &lib, &proxy, &app) {
+                                // this quality keeps failing: moved to the next lower one
                             } else {
                                 let msg = error.unwrap_or_else(|| "the stream ended".into());
                                 let _ = session.mpv.command(&["show-text", &format!("Could not play: {msg}"), "6000"]);
@@ -191,6 +213,50 @@ fn step(s: &Arc<Session>, lib: &Arc<Library>, proxy: &Proxy, app: &AppHandle, d:
     let _ = app.emit("hq-index", idx);
 }
 
+/// Next quality of the same channel (wraps around), or the one asked for.
+fn cycle_quality(s: &Arc<Session>, lib: &Arc<Library>, proxy: &Proxy, app: &AppHandle, to: Option<usize>) {
+    let changed = {
+        let mut st = s.state.lock().unwrap();
+        let i = st.index;
+        let n = st.items[i].alts.len();
+        if n < 2 {
+            None
+        } else {
+            let next = to.unwrap_or((st.items[i].alt + 1) % n);
+            st.items[i].alt = next;
+            st.retries = 0;
+            let a = &st.items[i].alts[next];
+            Some((i, a.live_id, format!("Quality {}/{} · {}", next + 1, n, a.label)))
+        }
+    };
+    match changed {
+        Some((i, live_id, msg)) => {
+            let _ = load_current(s, lib, proxy);
+            let _ = s.mpv.command(&["show-text", &msg, "2500"]);
+            let _ = app.emit("hq-alt", (i, live_id));
+        }
+        None => {
+            let _ = s.mpv.command(&["show-text", "This channel has one quality", "1500"]);
+        }
+    }
+}
+
+/// After repeated failures, try the next lower quality. False when there is none.
+fn step_down(s: &Arc<Session>, lib: &Arc<Library>, proxy: &Proxy, app: &AppHandle) -> bool {
+    let to = {
+        let st = s.state.lock().unwrap();
+        let it = &st.items[st.index];
+        (it.alt + 1 < it.alts.len()).then_some(it.alt + 1)
+    };
+    match to {
+        Some(n) => {
+            cycle_quality(s, lib, proxy, app, Some(n));
+            true
+        }
+        None => false,
+    }
+}
+
 fn cycle_fit(s: &Session) {
     let mut st = s.state.lock().unwrap();
     st.fit = (st.fit + 1) % 3;
@@ -218,7 +284,7 @@ fn load_current(s: &Arc<Session>, lib: &Arc<Library>, proxy: &Proxy) -> Result<(
 }
 
 fn resolve(item: &Item, lib: &Arc<Library>, proxy: &Proxy) -> Result<String> {
-    if let Some(id) = item.live_id {
+    if let Some(id) = item.current_live() {
         let store = lib.active_store()?.ok_or_else(|| Error::Account("no playlist".into()))?;
         let ch = store.channel_by_id(id)?.ok_or_else(|| Error::Account("channel not found".into()))?;
         return Ok(proxy.live_url_for(&ch.url) + "?lead=3");

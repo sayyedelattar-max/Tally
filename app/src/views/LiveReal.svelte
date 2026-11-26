@@ -2,6 +2,8 @@
   import { onMount, tick } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import { ui, t, toast, go } from '../lib/store.svelte';
+  import { moveBlock } from '../lib/order';
+  import { qGet, qSet, autoSet } from '../lib/quality';
   import { api, type Alt, type Chan, type Group } from '../lib/backend';
   import { artFor } from '../lib/art';
 
@@ -41,6 +43,7 @@
     if (!sel.length) return;
     const n = sel.length;
     try {
+      if (orderSnap) await saveOrder();
       await api.bulk(idsFor(action), action, g);
       toast(t('sel.done').replace('{n}', String(n)));
       sel = [];
@@ -54,21 +57,20 @@
   }
 
   // ---- one entry per channel, with a quality to choose (display only; the provider's list is untouched)
-  let merged = $state((() => { try { return localStorage.getItem('elara.merge') === '1'; } catch { return false; } })());
-  let qprefs: Record<string, number> = (() => { try { return JSON.parse(localStorage.getItem('elara.q') || '{}'); } catch { return {}; } })();
+  let merged = $state((() => { try { return localStorage.getItem('elara.merge') !== '0'; } catch { return true; } })());
   let qmenu = $state<number | null>(null);
-  const realOf = (c: Chan): Chan => (c.alts ? (c.alts.find((a) => a.chan.id === c.id)?.chan ?? c) : c);
+  function setMerged(v: boolean) { merged = v; try { localStorage.setItem('elara.merge', v ? '1' : '0'); } catch {} }
   function asRow(m: { key: string; name: string; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }): Chan {
     const alts: Alt[] = m.variants.map((v) => ({ chan: v.channel, label: v.label, score: v.score, hevc: v.hevc }));
-    const want = qprefs[m.key];
+    const want = qGet(m.key);
     const pick = alts.find((a) => a.chan.id === want) ?? alts.find((a) => !a.hevc) ?? alts[0];
     return alts.length > 1 ? { ...pick.chan, name: m.name, alts, mkey: m.key } : pick.chan;
   }
   function chooseQ(i: number, a: Alt) {
     const r = rows[i];
     if (!r.alts || !r.mkey) return;
-    qprefs[r.mkey] = a.chan.id;
-    try { localStorage.setItem('elara.q', JSON.stringify(qprefs)); } catch {}
+    qSet(r.mkey, a.chan.id);
+    autoSet(r.mkey, false);
     rows[i] = { ...a.chan, name: r.name, alts: r.alts, mkey: r.mkey };
     qmenu = null;
   }
@@ -93,6 +95,7 @@
 
   async function load(reset: boolean) {
     const mine = ++ticket;
+    if (reset && orderSnap) { orderSnap = null; toast(t('ord.discarded')); }
     loading = true;
     error = '';
     try {
@@ -221,6 +224,41 @@
     if (!first) reloadGroups();
   });
 
+  // ---- move several categories at once, or type a position
+  let gsel = $state<string[]>([]);
+  let gpos = $state('');
+  // Edits to categories stay in a draft until Save; Cancel / Esc put everything back.
+  let gSnap = $state<Group[] | null>(null);
+  function commitGroups(next: Group[]) { groups = next; }
+  const gDirty = $derived(!!gSnap && JSON.stringify(groups.map((g) => [g.name, g.hidden])) !== JSON.stringify(gSnap.map((g) => [g.name, g.hidden])));
+  function startGroups() { gSnap = groups.map((g) => ({ ...g })); gsel = []; editGroups = true; }
+  function cancelGroups() { if (gSnap) groups = gSnap; gSnap = null; gsel = []; editGroups = false; }
+  async function saveGroups() {
+    const snap = gSnap;
+    try {
+      if (gDirty && snap) {
+        await api.reorderGroups(groups.map((g) => g.name));
+        for (const g of groups) if (snap.find((x) => x.name === g.name)?.hidden !== g.hidden) await api.setGroupHidden(g.name, g.hidden);
+        if (groups.find((g) => g.name === group)?.hidden) group = '';
+        toast(t('ord.saved'));
+      }
+    } catch (e) { toast(String(e)); }
+    gSnap = null; gsel = []; editGroups = false;
+    await reloadGroups();
+  }
+  function moveGroups(pos: number) {
+    const idx = groups.map((g, i) => (gsel.includes(g.name) ? i : -1)).filter((i) => i >= 0);
+    if (!idx.length) return;
+    commitGroups(moveBlock(groups, idx, pos));
+    gpos = '';
+  }
+  function toggleG(name: string) { gsel = gsel.includes(name) ? gsel.filter((n) => n !== name) : [...gsel, name]; }
+  function setGroupPos(gi: number, v: string) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n) || n === gi + 1) return;
+    commitGroups(moveBlock(groups, [gi], n));
+  }
+
   let gDrag = $state<string | null>(null);
   let gOver = $state<string | null>(null);
   async function dropGroup(to: number) {
@@ -231,56 +269,53 @@
     const [m] = copy.splice(from, 1);
     copy.splice(to, 0, m);
     groups = copy;
-    try { await api.reorderGroups(copy.map((g) => g.name)); } catch (e) { toast(String(e)); reloadGroups(); }
   }
 
-  async function moveGroup(i: number, d: number) {
-    const j = i + d;
-    if (j < 0 || j >= groups.length) return;
-    const copy = [...groups];
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-    groups = copy;
-    try { await api.reorderGroups(copy.map((g) => g.name)); } catch (e) { toast(String(e)); reloadGroups(); }
+  function hideGroup(g: Group) { g.hidden = !g.hidden; }
+
+  // Order changes stay in a draft until Save; Cancel / Esc restore the previous order.
+  let orderSnap = $state<Chan[] | null>(null);
+  function stage(next: Chan[]) { if (!orderSnap) orderSnap = [...rows]; rows = next; }
+  function cancelOrder() { if (orderSnap) rows = orderSnap; orderSnap = null; }
+  async function saveOrder() {
+    const ids = rows.map((c) => c.id);
+    try { await (inFav ? api.reorder(ids) : api.reorderChannels(ids)); orderSnap = null; toast(t('ord.saved')); } catch (e) { toast(String(e)); }
   }
 
-  async function hideGroup(g: Group) {
-    const v = !g.hidden;
-    g.hidden = v;
-    try {
-      await api.setGroupHidden(g.name, v);
-      if (v && group === g.name) group = '';
-      if (v && !(showHidden || editGroups)) groups = groups.filter((x) => x.name !== g.name);
-    } catch (e) {
-      g.hidden = !v;
-      toast(String(e));
-    }
+  // ---- order the selected channels as a block (My order inside a category, or Favorites)
+  const orderable = $derived(!merged && !q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
+  let cpos = $state('');
+  function orderSel(pos: number) {
+    const idx = rows.map((r, i) => (isSel(r.id) ? i : -1)).filter((i) => i >= 0);
+    if (!idx.length) return;
+    stage(moveBlock(rows, idx, pos));
+    cpos = '';
+  }
+  function setRowPos(i: number, v: string) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n) || n === i + 1) return;
+    stage(moveBlock(rows, [i], n));
   }
 
   function open(i: number) {
     if (selecting) return;
-    ui.rplay = { list: rows.map(realOf), index: i };
+    ui.rplay = { list: [...rows], index: i };
   }
 
   // ---- the user's own order of favourites
   const canSort = $derived(!selecting && !merged && !q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
 
-  async function place(from: number, to: number) {
+  function place(from: number, to: number) {
     if (from === to || to < 0 || to >= rows.length) return;
     const moved = rows[from];
     const copy = rows.filter((_, i) => i !== from);
     copy.splice(to, 0, moved);
-    rows = copy;
-    try {
-      await (inFav ? api.reorder(copy.map((c) => c.id)) : api.reorderChannels(copy.map((c) => c.id)));
-    } catch (e) {
-      toast(String(e));
-      load(true);
-    }
+    stage(copy);
   }
 
   async function nudge(i: number, d: number) {
     const id = rows[i].id;
-    await place(i, i + d);
+    place(i, i + d);
     await tick();
     document.querySelector<HTMLElement>(`[data-row="${id}"]`)?.focus();
   }
@@ -302,6 +337,15 @@
   const initials = (n: string) => n.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 </script>
 
+<svelte:window onkeydown={(e) => {
+  if (e.key !== 'Escape' || ui.rplay) return;
+  if (moveOpen) moveOpen = false;
+  else if (qmenu !== null) qmenu = null;
+  else if (editGroups) cancelGroups();
+  else if (orderSnap) cancelOrder();
+  else if (selecting) endSelect();
+}} />
+
 {#if ui.real.loaded && !ui.real.items.length}
   <div class="none">
     <h2 class="display">{t('real.noPlaylist')}</h2>
@@ -309,10 +353,21 @@
     <button class="btn primary" onclick={() => go('playlists')}><Icon name="plus" size={18} /> {t('pl.add')}</button>
   </div>
 {:else}
-  <div class="wrap">
+  <div class="wrap" class:ed={editGroups}>
     <aside class="groups" aria-label={t('real.groups')}>
-      <div class="ghead"><b>{t('real.groups')}</b><button class="btn editg" class:on={editGroups} aria-pressed={editGroups} onclick={() => (editGroups = !editGroups)}><Icon name="sliders" size={16} /> {editGroups ? t('ord.doneGroups') : t('ord.editGroups')}</button></div>
-      {#if editGroups}<p class="hint muted">{t('ord.groupsHint')}</p>{/if}
+      <div class="ghead"><b>{t('real.groups')}</b>{#if editGroups}<span class="hbtns"><button class="btn sm" onclick={cancelGroups}>{t('common.cancel')}</button><button class="btn sm primary" onclick={saveGroups}>{t('common.save')}</button></span>{:else}<button class="btn editg" onclick={startGroups}><Icon name="sliders" size={16} /> {t('ord.editGroups')}</button>{/if}</div>
+      {#if editGroups}
+        <p class="hint muted">{t('ord.groupsHint')}</p>
+        <div class="gbar">
+          <button class="btn sm" onclick={() => (gsel = gsel.length === groups.length ? [] : groups.map((g) => g.name))}>{gsel.length === groups.length ? t('sel.none') : t('sel.all')}</button>
+          {#if gsel.length}
+            <b class="cnt">{t('sel.count').replace('{n}', String(gsel.length))}</b>
+            <button class="btn sm" onclick={() => moveGroups(1)}>{t('ord.top')}</button>
+            <button class="btn sm" onclick={() => moveGroups(1e9)}>{t('ord.bottom')}</button>
+            <label class="posgo"><span>{t('ord.moveTo')}</span><input type="number" min="1" bind:value={gpos} placeholder="N" aria-label={t('ord.moveTo')} onkeydown={(e) => e.key === 'Enter' && gpos && moveGroups(Number(gpos))} /><button class="btn sm primary" disabled={!gpos} onclick={() => moveGroups(Number(gpos))}>{t('ord.go')}</button></label>
+          {/if}
+        </div>
+      {/if}
       <button class="g" class:on={inFav} onclick={() => (group = FAV)}><span class="gn"><Icon name="star" size={15} filled /> {t('fav.title')}</span><span class="mono muted">{favCount}</span></button>
       <button class="g" class:on={group === ''} onclick={() => (group = '')}><span>{t('common.all')}</span><span class="mono muted">{total}</span></button>
       {#each groups as g, gi (g.name)}
@@ -324,11 +379,9 @@
           ondragend={() => (gDrag = gOver = null)}
           ondrop={(e) => { e.preventDefault(); dropGroup(gi); }}
         >
-          {#if editGroups}<span class="grip" aria-hidden="true"><Icon name="grid" size={16} /></span>{/if}
+          {#if editGroups}<button class="chk sm" class:on={gsel.includes(g.name)} role="checkbox" aria-checked={gsel.includes(g.name)} aria-label={g.name} onclick={() => toggleG(g.name)}>{#if gsel.includes(g.name)}<Icon name="check" size={14} />{/if}</button><input class="posin" type="number" min="1" value={gi + 1} aria-label={t('ord.pos')} onchange={(e) => setGroupPos(gi, e.currentTarget.value)} />{/if}
           <button class="g" class:on={group === g.name} onclick={() => (group = g.name)}><span class="gn">{g.name || '—'}</span><span class="mono muted">{g.count}</span></button>
           {#if editGroups}
-            <button class="mv sm" disabled={gi === 0} aria-label={t('fav.up')} onclick={() => moveGroup(gi, -1)}><span class="up"><Icon name="down" size={16} /></span></button>
-            <button class="mv sm" disabled={gi === groups.length - 1} aria-label={t('fav.down')} onclick={() => moveGroup(gi, 1)}><Icon name="down" size={16} /></button>
             <button class="mv sm" aria-pressed={g.hidden} aria-label={g.hidden ? t('ord.showGroup') : t('ord.hideGroup')} title={g.hidden ? t('ord.showGroup') : t('ord.hideGroup')} onclick={() => hideGroup(g)}><Icon name="eyeoff" size={16} /></button>
           {/if}
         </div>
@@ -341,6 +394,9 @@
         <input bind:value={q} placeholder={t('real.searchCh')} aria-label={t('real.searchCh')} autocomplete="off" />
       </label>
 
+      {#if orderSnap}
+        <div class="obar" role="status"><span>{t('ord.unsaved')}</span><span class="sp"></span><button class="btn sm" onclick={cancelOrder}>{t('common.cancel')}</button><button class="btn sm primary" onclick={saveOrder}>{t('common.save')}</button></div>
+      {/if}
       <div class="tools">
         {#if !inFav}
           <div class="seg" role="group" aria-label={t('ord.sort')}>
@@ -350,7 +406,10 @@
           </div>
           <button class="btn" aria-pressed={showHidden} class:on={showHidden} onclick={() => (showHidden = !showHidden)}>{t('ord.showHidden')}</button>
         {/if}
-        {#if !inFav}<button class="btn" class:on={merged} aria-pressed={merged} title={t('mrg.tip')} onclick={() => { merged = !merged; try { localStorage.setItem('elara.merge', merged ? '1' : '0'); } catch {} }}><Icon name="layers" size={16} /> {t('mrg.one')}</button>{/if}
+        {#if !inFav}<div class="seg" role="group" aria-label={t('mrg.view')} title={t('mrg.tip')}>
+          <button class:on={merged} onclick={() => setMerged(true)}>{t('mrg.channels')}</button>
+          <button class:on={!merged} onclick={() => setMerged(false)}>{t('mrg.provider')}</button>
+        </div>{/if}
         <button class="btn sel" class:on={selecting} aria-pressed={selecting} onclick={() => (selecting ? endSelect() : (selecting = true))}><Icon name="check" size={16} /> {selecting ? t('sel.done2') : t('sel.start')}</button>
       </div>
       {#if !inFav}
@@ -375,8 +434,9 @@
           >
             {#if selecting}<button class="chk" class:on={isSel(c.id)} role="checkbox" aria-checked={isSel(c.id)} aria-label={c.name} onclick={(e) => toggleSel(i, e.shiftKey)}>{#if isSel(c.id)}<Icon name="check" size={16} />{/if}</button>{/if}
             {#if canSort}<span class="grip" title={t('fav.drag')} aria-hidden="true"><Icon name="grid" size={18} /></span>{/if}
+            {#if orderable && !selecting}<input class="posin" type="number" min="1" value={i + 1} aria-label={t('ord.pos')} onchange={(e) => setRowPos(i, e.currentTarget.value)} />{/if}
             <button class="row" data-row={c.id} onclick={(e) => (selecting ? toggleSel(i, e.shiftKey) : open(i))} onkeydown={(e) => rowKey(e, i)}>
-              <span class="num mono">{i + 1}</span>
+              {#if !(orderable && !selecting)}<span class="num mono">{i + 1}</span>{/if}
               <span class="logo" style="background:{a.bg};color:{a.ink}">
                 {#if c.logo}<img src={c.logo} alt="" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
                 <b>{initials(c.name)}</b>
@@ -415,6 +475,11 @@
           <button class="btn" onclick={() => { sel = rows.map((r) => r.id); }}>{t('sel.all')}</button>
           <button class="btn" disabled={!sel.length} onclick={() => (sel = [])}>{t('sel.none')}</button>
           <span class="sp"></span>
+          {#if orderable}
+            <button class="btn" disabled={!sel.length} onclick={() => orderSel(1)}>{t('ord.top')}</button>
+            <button class="btn" disabled={!sel.length} onclick={() => orderSel(1e9)}>{t('ord.bottom')}</button>
+            <label class="posgo"><span>{t('ord.moveTo')}</span><input type="number" min="1" bind:value={cpos} placeholder="N" aria-label={t('ord.moveTo')} disabled={!sel.length} onkeydown={(e) => e.key === 'Enter' && cpos && orderSel(Number(cpos))} /><button class="btn" disabled={!sel.length || !cpos} onclick={() => orderSel(Number(cpos))}>{t('ord.go')}</button></label>
+          {/if}
           <button class="btn primary" disabled={!sel.length} onclick={() => bulk('favorite')}><Icon name="star" size={16} filled /> {t('sel.fav')}</button>
           {#if inFav}<button class="btn" disabled={!sel.length} onclick={() => bulk('unfavorite')}>{t('sel.unfav')}</button>{/if}
           <div class="mwrap">
@@ -489,6 +554,18 @@
   .qopt:hover { background: var(--surface-3); }
   .qopt.cur { background: var(--surface-3); font-weight: 600; }
   .tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line-2); color: var(--muted); }
+  .wrap.ed { grid-template-columns: 400px minmax(0, 1fr); }
+  .gbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 0 10px; position: sticky; top: 44px; background: var(--bg); z-index: 1; }
+  .btn.sm { min-height: 34px; padding: 0 14px; font-size: 13px; }
+  .chk.sm { width: 22px; height: 22px; margin-inline: 4px; }
+  .posin { flex: none; width: 52px; min-height: 34px; text-align: center; border: 0; border-radius: 10px; background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+  .posin::-webkit-outer-spin-button, .posin::-webkit-inner-spin-button, .posgo input::-webkit-outer-spin-button, .posgo input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .posin:focus { outline: 2px solid var(--text); }
+  .posgo { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+  .hbtns { display: inline-flex; gap: 6px; }
+  .obar { display: flex; gap: 8px; align-items: center; padding: 8px 8px 8px 16px; margin-bottom: 10px; border-radius: 16px; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); font-weight: 600; font-size: 14px; }
+  .obar .sp { flex: 1; }
+  .posgo input { width: 72px; min-height: 36px; padding: 0 10px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); text-align: center; }
   .ghead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; position: sticky; top: 0; background: var(--bg); padding-block: 4px; z-index: 1; }
   .gover { box-shadow: 0 -2px 0 var(--accent); }
   .gdrag { opacity: 0.4; }

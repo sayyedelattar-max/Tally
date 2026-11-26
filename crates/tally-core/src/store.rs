@@ -501,6 +501,7 @@ impl Store {
         let sql = format!(
             "SELECT {CH_COLS} FROM channels c
              WHERE hidden = 0 AND tvg_id <> '' AND (?1 = 0 OR fav = 1) AND (?2 IS NULL OR egrp = ?2)
+               AND c.id = (SELECT MIN(c2.id) FROM channels c2 WHERE c2.tvg_id = c.tvg_id AND c2.hidden = 0 AND (?1 = 0 OR c2.fav = 1) AND (?2 IS NULL OR c2.egrp = ?2))
                AND EXISTS (SELECT 1 FROM programmes p WHERE p.channel = c.tvg_id AND p.stop > ?3 AND p.start < ?4)
              ORDER BY {order} LIMIT ?5 OFFSET ?6"
         );
@@ -1033,5 +1034,8 @@ mod tests {
         assert_eq!(st.guide_channels(false, None, 10, 50, 0, 10).unwrap().len(), 1);
         assert_eq!(st.guide_channels(true, None, 10, 50, 0, 10).unwrap().len(), 1);
         assert_eq!(st.guide_info().unwrap(), (1, 100));
+        // two qualities of one channel share a guide id: the guide lists the channel once
+        st.import_channels(vec![ch("A", "News", "a"), ch("A HD", "News", "a"), ch("B", "News", "b")]).unwrap();
+        assert_eq!(st.guide_channels(false, None, 10, 50, 0, 10).unwrap().len(), 1);
     }
 }

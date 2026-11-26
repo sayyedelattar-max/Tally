@@ -2,7 +2,8 @@
     import mpegts from 'mpegts.js';
   import Icon from './Icon.svelte';
   import { ui, t } from '../lib/store.svelte';
-  import { api, type Chan } from '../lib/backend';
+  import { api, type Alt, type Chan } from '../lib/backend';
+  import { qSet, autoGet, autoSet } from '../lib/quality';
 
   let video: HTMLVideoElement | undefined = $state();
   let root: HTMLElement | undefined = $state();
@@ -33,6 +34,37 @@
   const cur = $derived(rp.list[rp.index]);
   const isVod = $derived(!!cur?.vod);
 
+  // ---- quality: one channel, several qualities from the provider (like YouTube's gear menu)
+  const alts = $derived(cur?.alts ?? []);
+  const altIdx = $derived(alts.findIndex((a) => a.chan.id === cur?.id));
+  const curAlt = $derived(alts[altIdx]);
+  let auto = $state(true);
+  let qOpen = $state(false);
+  let stalled: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => { auto = cur?.mkey ? autoGet(cur.mkey) : false; });
+
+  function useAlt(a: Alt, manual: boolean) {
+    if (!cur?.mkey) return;
+    if (manual) { auto = false; autoSet(cur.mkey, false); qSet(cur.mkey, a.chan.id); }
+    rp.list[rp.index] = { ...a.chan, name: cur.name, alts: cur.alts, mkey: cur.mkey };
+    qOpen = false;
+  }
+  function chooseAuto() {
+    if (!cur?.mkey) return;
+    auto = true;
+    autoSet(cur.mkey, true);
+    qOpen = false;
+  }
+  /** Auto mode: when this quality struggles, go one step lower (and tell the viewer). */
+  function stepDown(): boolean {
+    if (!auto || altIdx < 0) return false;
+    const lower = alts[altIdx + 1];
+    if (!lower) return false;
+    useAlt(lower, false);
+    status = 'loading';
+    return true;
+  }
+
   function stop() {
     try { ts?.destroy(); } catch {}
     ts = null;
@@ -43,6 +75,7 @@
   }
 
   function fail(detail: string) {
+    if (!isVod && stepDown()) return;
     status = 'error';
     errDetail = detail;
     errKind = /codec|incompatible|bufferAppend|fragParsing/i.test(detail) ? 'codec' : 'other';
@@ -160,7 +193,8 @@
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     const k = e.key;
     if (k === 'Escape') {
-      if (!document.fullscreenElement) close();
+      if (qOpen) qOpen = false;
+      else if (!document.fullscreenElement) close();
     } else if (k === ' ' || k === 'k') toggle();
     else if (isVod && k === 'ArrowLeft') seek(-10);
     else if (isVod && k === 'ArrowRight') seek(10);
@@ -183,8 +217,8 @@
     style:object-fit={fit}
     bind:this={video}
     playsinline
-    onplaying={() => { status = 'playing'; paused = false; }}
-    onwaiting={() => { if (status === 'playing') status = 'buffering'; }}
+    onplaying={() => { status = 'playing'; paused = false; clearTimeout(stalled); }}
+    onwaiting={() => { if (status === 'playing') { status = 'buffering'; clearTimeout(stalled); stalled = setTimeout(() => { if (status === 'buffering') stepDown(); }, 9000); } }}
     onpause={() => (paused = true)}
     onplay={() => (paused = false)}
     onvolumechange={() => (muted = !!video?.muted)}
@@ -201,6 +235,7 @@
       <span class="mono">{cur.number ?? ''}</span>
       <b>{cur.name}</b>
       <span class="muted">{cur.group}</span>
+      {#if curAlt}<span class="qnow">{auto ? t('q.auto') + ' · ' : ''}{curAlt.label}</span>{/if}
     </div>
   </div>
 
@@ -233,6 +268,19 @@
     <button class="rb" onclick={() => zap(1)} aria-label={t('player.nextCh')}><Icon name="next" size={22} /></button>
     <span class="sp"></span>
     <button class="rb" onclick={mute} aria-label={muted ? t('player.unmute') : t('player.mute')} aria-pressed={muted}><Icon name="volume" size={22} /></button>
+    {#if alts.length > 1}
+      <div class="qwrap">
+        <button class="rb fitb" aria-haspopup="menu" aria-expanded={qOpen} onclick={() => (qOpen = !qOpen)} title={t('mrg.pick')}>{auto ? t('q.auto') : curAlt?.label}</button>
+        {#if qOpen}
+          <div class="qmenu" role="menu">
+            <button role="menuitemradio" aria-checked={auto} class:cur={auto} onclick={chooseAuto}>{t('q.auto')}<small>{t('q.autoHint')}</small></button>
+            {#each alts as a (a.chan.id)}
+              <button role="menuitemradio" aria-checked={!auto && a.chan.id === cur.id} class:cur={!auto && a.chan.id === cur.id} onclick={() => useAlt(a, true)}>{a.label}{#if a.hevc}<small>H.265</small>{/if}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
     <button class="rb fitb" onclick={cycleFit} title={t('rp.fit')}>{t('rp.fit.' + fit)}</button>
     <button class="rb" onclick={fullscreen} aria-label={t('player.fullscreen')} aria-pressed={full}><Icon name="expand" size={22} /></button>
   </div>
@@ -241,7 +289,14 @@
 <style>
   .rp { position: fixed; inset: 0; z-index: 60; background: #000; color: #fff; display: grid; }
   .rp.idle { cursor: none; }
-  .fitb { width: auto; padding-inline: 12px; font-size: 13px; }
+  .fitb { width: auto; padding-inline: 14px; font-size: 13px; border-radius: 999px; }
+  .qnow { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.16); white-space: nowrap; }
+  .qwrap { position: relative; }
+  .qmenu { position: absolute; inset-inline-end: 0; bottom: calc(100% + 10px); min-width: 270px; max-height: 60vh; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; border-radius: 14px; background: rgba(28, 28, 30, 0.96); border: 1px solid rgba(255, 255, 255, 0.14); box-shadow: 0 20px 44px -10px rgb(0 0 0 / 0.8); }
+  .qmenu button { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; color: #fff; font-size: 14px; text-align: start; }
+  .qmenu button:hover { background: rgba(255, 255, 255, 0.12); }
+  .qmenu button.cur { background: rgba(255, 255, 255, 0.2); font-weight: 600; }
+  .qmenu small { opacity: 0.6; font-size: 11px; white-space: nowrap; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; }
   .top, .bottom { position: absolute; inset-inline: 0; display: flex; align-items: center; gap: 10px; padding: 18px 24px; background: rgba(0, 0, 0, 0.55); transition: opacity 0.2s; }
   .top { top: 0; }

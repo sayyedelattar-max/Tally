@@ -3,6 +3,7 @@
   import RealPlayer from './RealPlayer.svelte';
   import { ui, t } from '../lib/store.svelte';
   import { api, onHq } from '../lib/backend';
+  import { qSet, autoSet } from '../lib/quality';
 
   // 'pending' while deciding, 'hq' when the high-quality player window has taken over, else the built-in player.
   let mode = $state<'pending' | 'hq' | 'builtin'>('pending');
@@ -16,7 +17,7 @@
     if (!rp) return false;
     try {
       await api.hqPlay(
-        rp.list.map((c) => ({ name: c.name, liveId: c.vod ? null : c.id, vod: c.vod ?? null })),
+        rp.list.map((c) => ({ name: c.name, liveId: c.vod ? null : c.id, vod: c.vod ?? null, alts: (c.alts ?? []).map((a) => ({ liveId: a.chan.id, label: a.label })), alt: Math.max(0, (c.alts ?? []).findIndex((a) => a.chan.id === c.id)) })),
         rp.index,
         { quality: ui.settings.quality, bufferSecs: BUFFER_SECS[ui.settings.buffer] ?? 30, fullscreen: false },
       );
@@ -35,6 +36,7 @@
           closed: () => { ui.rplay = null; },
           index: (i) => { if (ui.rplay) ui.rplay.index = i; },
           error: (m) => { note = m; },
+          alt: (i, liveId) => { const c = ui.rplay?.list[i]; const a = c?.alts?.find((x) => x.chan.id === liveId); if (c && a && c.mkey) { qSet(c.mkey, liveId); autoSet(c.mkey, false); ui.rplay!.list[i] = { ...a.chan, name: c.name, alts: c.alts, mkey: c.mkey }; } },
         });
         if (await toHq()) {
           mode = 'hq';

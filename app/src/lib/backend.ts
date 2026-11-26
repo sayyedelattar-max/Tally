@@ -50,7 +50,7 @@ export const api = {
   diagnose: (id: number) => call<string>('diagnose_channel', { id }),
   play: (id: number) => call<{ url: string }>('play_channel', { id }),
   hqAvailable: () => call<boolean>('hq_available'),
-  hqPlay: (items: { name: string; liveId: number | null; vod: VodRef | null }[], index: number, options: { quality: string; bufferSecs: number; fullscreen: boolean }) =>
+  hqPlay: (items: { name: string; liveId: number | null; vod: VodRef | null; alts: { liveId: number; label: string }[]; alt: number }[], index: number, options: { quality: string; bufferSecs: number; fullscreen: boolean }) =>
     call<void>('hq_play', { items, index, options }),
   hqStop: () => call<void>('hq_stop'),
   shelves: (kind: string, perRow: number, maxRows: number) => call<Shelf[]>('title_rows', { kind, perRow, maxRows }),
@@ -78,12 +78,13 @@ export function expiry(epoch: number | null): { date: string; days: number } | n
 }
 
 /** Events from the high-quality player window. Returns a function that stops listening. */
-export async function onHq(handlers: { closed?: () => void; index?: (i: number) => void; error?: (m: string) => void }): Promise<() => void> {
+export async function onHq(handlers: { closed?: () => void; index?: (i: number) => void; error?: (m: string) => void; alt?: (index: number, liveId: number) => void }): Promise<() => void> {
   const { listen } = await import('@tauri-apps/api/event');
   const offs = await Promise.all([
     listen('hq-closed', () => handlers.closed?.()),
     listen<number>('hq-index', (e) => handlers.index?.(e.payload)),
     listen<string>('hq-error', (e) => handlers.error?.(e.payload)),
+    listen<[number, number]>('hq-alt', (e) => handlers.alt?.(e.payload[0], e.payload[1])),
   ]);
   return () => offs.forEach((f) => f());
 }
