@@ -46,11 +46,13 @@
   {#if error}<p class="err" role="alert">{error}</p>{/if}
   <div class="acts">
     <button class="btn primary" type="submit" disabled={busy}>{busy ? t('pl.connecting') : editing ? t('pl.saveChanges') : t('pl.save')}</button>
+    {#if busy}<span class="slowhint">{t('pl.slow')}</span>{/if}
     <button class="btn" type="button" onclick={oncancel} disabled={busy}>{t('common.cancel')}</button>
   </div>
 </form>
 
 <style>
+  .slowhint { align-self: center; color: var(--muted, #8a8f98); font-size: 13px; }
   .add { display: flex; flex-direction: column; gap: 16px; align-items: flex-start; max-width: 620px; padding: 22px; margin-bottom: 26px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); }
   h2 { font-size: 26px; font-weight: 600; }
   .f { display: flex; flex-direction: column; gap: 6px; width: 100%; font-size: 13px; color: var(--muted); }

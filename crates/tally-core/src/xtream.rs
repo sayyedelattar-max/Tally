@@ -115,7 +115,7 @@ impl XtreamClient {
         for family in [ureq::config::IpFamily::Ipv4Only, ureq::config::IpFamily::Any] {
             for (n, ua) in USER_AGENTS.iter().enumerate() {
                 // The first name gets a long wait: some panels need a minute to answer the first call.
-                agents.push((family, make(family, ua, if n == 0 { 60 } else { 25 })));
+                agents.push((family, make(family, ua, if n == 0 { 180 } else { 30 })));
                 patient.push(make(family, ua, 180));
             }
         }
@@ -208,6 +208,8 @@ impl XtreamClient {
     pub fn account(&self) -> Result<AccountInfo> {
         let mut body = self.get(&self.url("player_api.php", ""))?;
         let text = body
+            .with_config()
+            .limit(u64::MAX)
             .read_to_string()
             .map_err(|e| Error::Http(self.scrub(&e.to_string())))?;
         let v: Value = serde_json::from_str(&text)
@@ -220,13 +222,30 @@ impl XtreamClient {
         // The JSON API is on every panel; `get.php` is often switched off (404).
         match self.playlist_json(&mut sink) {
             Ok(n) if n > 0 => Ok(n),
-            Ok(_) | Err(_) => self.playlist_m3u(sink),
+            first => {
+                // get.php is only a fallback; some providers answer it with a one-channel notice
+                // video, which must never replace a real failure.
+                let mut got = Vec::new();
+                match self.playlist_m3u(|c| got.push(c)) {
+                    Ok(n) if n > 1 => {
+                        got.into_iter().for_each(&mut sink);
+                        Ok(n)
+                    }
+                    _ => match first {
+                        Err(e) => Err(e),
+                        Ok(_) => Err(Error::Account("the provider returned no channels for this account".into())),
+                    },
+                }
+            }
         }
     }
 
     fn json(&self, action: &str) -> Result<Value> {
         let mut body = self.get(&self.url("player_api.php", &format!("&action={action}")))?;
+        // Real catalogues are tens of megabytes; the default 10 MB cap made big lists fail.
         let text = body
+            .with_config()
+            .limit(u64::MAX)
             .read_to_string()
             .map_err(|e| Error::Http(self.scrub(&e.to_string())))?;
         serde_json::from_str(&text).map_err(|_| Error::Account(format!("unexpected reply to {action}")))
@@ -369,7 +388,7 @@ fn parse_account(v: &Value) -> Result<AccountInfo> {
     }
     Ok(AccountInfo {
         status: info.get("status").and_then(Value::as_str).unwrap_or("").to_string(),
-        expires_at: num(info.get("exp_date")),
+        expires_at: num(info.get("exp_date")).filter(|n| *n > 0),
         is_trial: num(info.get("is_trial")).unwrap_or(0) == 1,
         max_connections: num(info.get("max_connections")).and_then(|n| u32::try_from(n).ok()),
         active_connections: num(info.get("active_cons")).and_then(|n| u32::try_from(n).ok()),
