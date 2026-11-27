@@ -38,6 +38,7 @@ export const api = {
   playlists: () => call<Registry>('playlists_list'),
   save: (a: { id: string | null; name: string; host: string; user: string; pass: string | null }) => call<PlaylistInfo>('playlist_save', a),
   refresh: (id: string) => call<PlaylistInfo>('playlist_refresh', { id }),
+  autoRefresh: (maxAgeSecs: number) => call<[number, number] | null>('playlist_auto_refresh', { maxAgeSecs }),
   remove: (id: string) => call<void>('playlist_remove', { id }),
   activate: (id: string) => call<void>('playlist_activate', { id }),
   groups: (showHidden = false) => call<Group[]>('live_groups', { showHidden }),

@@ -175,6 +175,19 @@ impl Library {
         self.save(Some(id), &m.name.clone(), &m.host.clone(), &m.user.clone(), None)
     }
 
+    /// Refresh the active playlist when its last download is older than `max_age_secs`.
+    /// Returns (channels before, channels after) when a refresh happened. User ordering, favourites,
+    /// hidden channels and own categories survive because the import merges by channel id.
+    pub fn auto_refresh(&self, max_age_secs: i64) -> Result<Option<(i64, i64)>> {
+        let (active, items) = self.read()?;
+        let Some(m) = active.and_then(|a| items.into_iter().find(|m| m.id == a)) else { return Ok(None) };
+        if now() - m.updated_at < max_age_secs {
+            return Ok(None);
+        }
+        let after = self.refresh(&m.id)?;
+        Ok(Some((m.channels, after.channels)))
+    }
+
     pub fn remove(&self, id: &str) -> Result<()> {
         let (active, mut items) = self.read()?;
         items.retain(|m| m.id != id);

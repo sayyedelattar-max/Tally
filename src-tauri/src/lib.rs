@@ -152,6 +152,12 @@ async fn playlist_refresh(lib: Lib<'_>, id: String) -> std::result::Result<Playl
 }
 
 #[tauri::command]
+async fn playlist_auto_refresh(lib: Lib<'_>, max_age_secs: i64) -> std::result::Result<Option<(i64, i64)>, String> {
+    let lib = lib.inner().clone();
+    blocking(move || Ok(lib.auto_refresh(max_age_secs)?)).await
+}
+
+#[tauri::command]
 async fn playlist_remove(lib: Lib<'_>, id: String) -> std::result::Result<(), String> {
     let lib = lib.inner().clone();
     blocking(move || lib.remove(&id)).await
@@ -732,6 +738,7 @@ pub fn run() {
             playlists_list,
             playlist_save,
             playlist_refresh,
+            playlist_auto_refresh,
             playlist_remove,
             playlist_activate,
             live_groups,

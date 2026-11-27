@@ -98,7 +98,7 @@ impl XtreamClient {
                 .ip_family(family)
                 .user_agent(ua)
                 .timeout_connect(Some(Duration::from_secs(8)))
-                .timeout_recv_response(Some(Duration::from_secs(30)))
+                .timeout_recv_response(Some(Duration::from_secs(120)))
                 .build()
                 .into()
         };
@@ -144,7 +144,13 @@ impl XtreamClient {
             if skip_family == Some(*family) {
                 continue;
             }
-            match agent.get(url).call() {
+            // A slow first byte is not a dead address: the server did answer the connection, it is
+            // just busy building a big list. Try the same agent once more before giving up.
+            let mut res = agent.get(url).call();
+            if matches!(res, Err(ureq::Error::Timeout(ureq::Timeout::RecvResponse))) {
+                res = agent.get(url).call();
+            }
+            match res {
                 Ok(resp) => return Ok(resp.into_body()),
                 Err(ureq::Error::StatusCode(code)) => {
                     // 403/404 may mean "unknown client": try the next name. Anything else is final.
@@ -156,6 +162,9 @@ impl XtreamClient {
                 Err(e) => {
                     // Could not connect at all: other names will not help on this address family.
                     last = self.scrub(&e.to_string());
+                    if matches!(e, ureq::Error::Timeout(ureq::Timeout::RecvResponse)) {
+                        last = format!("the server connected but took too long to answer. {last}");
+                    }
                     skip_family = Some(*family);
                 }
             }

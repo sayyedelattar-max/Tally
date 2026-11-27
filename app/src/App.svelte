@@ -15,12 +15,23 @@
   import TitlesReal from './views/TitlesReal.svelte';
   import Settings from './views/Settings.svelte';
   import { onMount } from 'svelte';
-  import { ui, t, openSearch, loadRegistry } from './lib/store.svelte';
-  import { inApp } from './lib/backend';
+  import { ui, t, toast, openSearch, loadRegistry } from './lib/store.svelte';
+  import { inApp, api } from './lib/backend';
   import { move } from './lib/spatial';
 
   onMount(() => {
     loadRegistry().catch(() => {});
+    // Providers change their lists now and then: re-download when the saved copy is older than 6 hours,
+    // at start and again every 30 minutes while the app stays open. Failures stay silent.
+    const tick = () => {
+      if (!inApp) return;
+      api.autoRefresh(6 * 3600).then((r) => {
+        if (r) { toast(t('toast.updatedPl')); loadRegistry().catch(() => {}); }
+      }).catch(() => {});
+    };
+    const first = setTimeout(tick, 4000);
+    const iv = setInterval(tick, 30 * 60 * 1000);
+    return () => { clearTimeout(first); clearInterval(iv); };
   });
 
   const sample = $derived(inApp && ['replay'].includes(ui.view));
