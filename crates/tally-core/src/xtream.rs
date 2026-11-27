@@ -16,10 +16,12 @@ use std::fmt;
 use std::io::BufReader;
 use std::time::Duration;
 
-const USER_AGENTS: [&str; 3] = [
-    "Tally/0.1",
+const USER_AGENTS: [&str; 5] = [
+    "IPTVSmartersPro",
+    "okhttp/4.12.0",
     "VLC/3.0.20 LibVLC/3.0.20",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Tally/0.1",
 ];
 
 #[derive(Clone)]
@@ -30,6 +32,10 @@ pub struct XtreamClient {
     /// Tried in order. IPv4 first, because many hosts publish an IPv6 address that never answers
     /// and a browser's happy-eyeballs fallback is not something plain sockets do.
     agents: Vec<(ureq::config::IpFamily, ureq::Agent)>,
+    /// Same combinations, but willing to wait for a big list (time to first byte up to 3 minutes).
+    patient: Vec<ureq::Agent>,
+    /// Index of the combination that last answered; used first, with the patient agent.
+    working: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
 }
 
 impl fmt::Debug for XtreamClient {
@@ -93,24 +99,26 @@ impl XtreamClient {
         if !base.contains("://") {
             base = format!("http://{base}");
         }
-        let make = |family: ureq::config::IpFamily, ua: &str| -> ureq::Agent {
+        let make = |family: ureq::config::IpFamily, ua: &str, recv: u64| -> ureq::Agent {
             ureq::Agent::config_builder()
                 .ip_family(family)
                 .user_agent(ua)
                 .timeout_connect(Some(Duration::from_secs(8)))
-                .timeout_recv_response(Some(Duration::from_secs(120)))
+                .timeout_recv_response(Some(Duration::from_secs(recv)))
                 .build()
                 .into()
         };
         // Outer: IPv4 first (many hosts publish an IPv6 address that never answers). Inner: some
-        // providers answer 403/404 to clients they do not recognise, so retry with player-style names.
+        // providers refuse or silently ignore clients they do not recognise, so try player-style names.
         let mut agents = Vec::new();
+        let mut patient = Vec::new();
         for family in [ureq::config::IpFamily::Ipv4Only, ureq::config::IpFamily::Any] {
             for ua in USER_AGENTS {
-                agents.push((family, make(family, ua)));
+                agents.push((family, make(family, ua, 12)));
+                patient.push(make(family, ua, 180));
             }
         }
-        Self { base, user: username.to_string(), pass: password.to_string(), agents }
+        Self { base, user: username.to_string(), pass: password.to_string(), agents, patient, working: Default::default() }
     }
 
     fn url(&self, path: &str, extra: &str) -> String {
@@ -137,34 +145,50 @@ impl XtreamClient {
     }
 
     fn get(&self, url: &str) -> Result<ureq::Body> {
+        // 1. The combination that worked before, allowed to be slow.
+        let known = *self.working.lock().unwrap();
+        if let Some(i) = known {
+            match self.patient[i].get(url).call() {
+                Ok(resp) => return Ok(resp.into_body()),
+                Err(ureq::Error::StatusCode(code)) if code != 403 && code != 404 => {
+                    return Err(Error::Http(format!("http status: {code}")));
+                }
+                Err(ureq::Error::Timeout(ureq::Timeout::RecvResponse)) => {
+                    return Err(Error::Http("the server connected but took too long to answer. Try again in a minute.".into()));
+                }
+                Err(_) => *self.working.lock().unwrap() = None,
+            }
+        }
+        // 2. Probe: short waits, every client name. A silent timeout usually means "unknown client".
         let mut last = String::new();
         let mut status: Option<u16> = None;
+        let mut connected = false;
         let mut skip_family = None;
-        for (family, agent) in &self.agents {
+        for (i, (family, agent)) in self.agents.iter().enumerate() {
             if skip_family == Some(*family) {
                 continue;
             }
-            // A slow first byte is not a dead address: the server did answer the connection, it is
-            // just busy building a big list. Try the same agent once more before giving up.
-            let mut res = agent.get(url).call();
-            if matches!(res, Err(ureq::Error::Timeout(ureq::Timeout::RecvResponse))) {
-                res = agent.get(url).call();
+            if *family == ureq::config::IpFamily::Any && connected {
+                break;
             }
-            match res {
-                Ok(resp) => return Ok(resp.into_body()),
+            match agent.get(url).call() {
+                Ok(resp) => {
+                    *self.working.lock().unwrap() = Some(i);
+                    return Ok(resp.into_body());
+                }
                 Err(ureq::Error::StatusCode(code)) => {
-                    // 403/404 may mean "unknown client": try the next name. Anything else is final.
+                    connected = true;
                     if code != 403 && code != 404 {
                         return Err(Error::Http(format!("http status: {code}")));
                     }
                     status = Some(code);
                 }
+                Err(ureq::Error::Timeout(ureq::Timeout::RecvResponse)) => {
+                    connected = true;
+                    last = "the server connected but did not answer".into();
+                }
                 Err(e) => {
-                    // Could not connect at all: other names will not help on this address family.
                     last = self.scrub(&e.to_string());
-                    if matches!(e, ureq::Error::Timeout(ureq::Timeout::RecvResponse)) {
-                        last = format!("the server connected but took too long to answer. {last}");
-                    }
                     skip_family = Some(*family);
                 }
             }

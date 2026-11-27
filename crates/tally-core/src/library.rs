@@ -142,8 +142,8 @@ impl Library {
         }
         let mut store = Store::open(&self.db_path(&id))?;
         let n = store.import_channels(list)?;
-        // Movies and series are a bonus: a provider without them must not block adding the playlist.
-        let _ = sync_titles_into(&client, &mut store);
+        // Movies and series are fetched afterwards (see `sync_titles`): they are large and must not
+        // keep the add-playlist screen waiting.
         self.secrets.set(&id, &pass)?;
 
         let meta = PlaylistMeta {
@@ -172,7 +172,14 @@ impl Library {
     pub fn refresh(&self, id: &str) -> Result<PlaylistMeta> {
         let (_, items) = self.read()?;
         let m = items.iter().find(|m| m.id == id).ok_or_else(|| Error::Account("that playlist no longer exists".into()))?;
-        self.save(Some(id), &m.name.clone(), &m.host.clone(), &m.user.clone(), None)
+        let meta = self.save(Some(id), &m.name.clone(), &m.host.clone(), &m.user.clone(), None)?;
+        // Keep movies and series current too; a provider without them must not fail the refresh.
+        if self.read()?.0.as_deref() == Some(id) {
+          if let (Some(client), Some(mut store)) = (self.client()?, self.active_store()?) {
+            let _ = sync_titles_into(&client, &mut store);
+          }
+        }
+        Ok(meta)
     }
 
     /// Refresh the active playlist when its last download is older than `max_age_secs`.
