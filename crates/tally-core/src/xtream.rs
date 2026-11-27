@@ -113,8 +113,9 @@ impl XtreamClient {
         let mut agents = Vec::new();
         let mut patient = Vec::new();
         for family in [ureq::config::IpFamily::Ipv4Only, ureq::config::IpFamily::Any] {
-            for ua in USER_AGENTS {
-                agents.push((family, make(family, ua, 12)));
+            for (n, ua) in USER_AGENTS.iter().enumerate() {
+                // The first name gets a long wait: some panels need a minute to answer the first call.
+                agents.push((family, make(family, ua, if n == 0 { 60 } else { 25 })));
                 patient.push(make(family, ua, 180));
             }
         }
