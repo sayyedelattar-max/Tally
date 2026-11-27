@@ -230,6 +230,8 @@ struct VariantDto {
 struct MergedDto {
     key: String,
     name: String,
+    /// The favourite quality of this channel (0 when not asked for).
+    selected: i64,
     variants: Vec<VariantDto>,
 }
 
@@ -248,6 +250,27 @@ async fn live_channels_merged(lib: Lib<'_>, group: Option<String>, query: Option
             .map(|m| MergedDto {
                 key: m.key,
                 name: m.name,
+                selected: 0,
+                variants: m.variants.into_iter().map(|v| VariantDto { channel: v.channel.into(), label: v.label, score: v.score, hevc: v.hevc }).collect(),
+            })
+            .collect())
+    })
+    .await
+}
+
+/// Favourites as channels: every quality of a favourite channel folded into one entry, in the user's order.
+#[tauri::command]
+async fn live_favorites_merged(lib: Lib<'_>) -> std::result::Result<Vec<MergedDto>, String> {
+    let lib = lib.inner().clone();
+    blocking(move || {
+        let Some(store) = lib.active_store()? else { return Ok(Vec::new()) };
+        Ok(store
+            .favorites_merged()?
+            .into_iter()
+            .map(|(m, selected)| MergedDto {
+                key: m.key,
+                name: m.name,
+                selected,
                 variants: m.variants.into_iter().map(|v| VariantDto { channel: v.channel.into(), label: v.label, score: v.score, hevc: v.hevc }).collect(),
             })
             .collect())
@@ -715,6 +738,7 @@ pub fn run() {
             live_channels,
             live_channels_sorted,
             live_channels_merged,
+            live_favorites_merged,
             reorder_channels,
             set_hidden,
             reorder_groups,

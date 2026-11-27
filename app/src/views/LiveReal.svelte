@@ -60,11 +60,11 @@
   let merged = $state((() => { try { return localStorage.getItem('elara.merge') !== '0'; } catch { return true; } })());
   let qmenu = $state<number | null>(null);
   function setMerged(v: boolean) { merged = v; try { localStorage.setItem('elara.merge', v ? '1' : '0'); } catch {} }
-  function asRow(m: { key: string; name: string; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }): Chan {
+  function asRow(m: { key: string; name: string; selected?: number; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }): Chan {
     const alts: Alt[] = m.variants.map((v) => ({ chan: v.channel, label: v.label, score: v.score, hevc: v.hevc }));
     const want = qGet(m.key);
-    const pick = alts.find((a) => a.chan.id === want) ?? alts.find((a) => !a.hevc) ?? alts[0];
-    return alts.length > 1 ? { ...pick.chan, name: m.name, alts, mkey: m.key } : pick.chan;
+    const pick = alts.find((a) => a.chan.id === want) ?? alts.find((a) => a.chan.id === m.selected) ?? alts.find((a) => !a.hevc) ?? alts[0];
+    return alts.length > 1 ? { ...pick.chan, name: m.name, fav: alts.some((a) => a.chan.fav), alts, mkey: m.key } : pick.chan;
   }
   function chooseQ(i: number, a: Alt) {
     const r = rows[i];
@@ -74,10 +74,16 @@
     rows[i] = { ...a.chan, name: r.name, alts: r.alts, mkey: r.mkey };
     qmenu = null;
   }
+  /** The best picture on offer, read from the provider's own words (4K, FHD, HD). */
+  function bestTag(c: Chan): string {
+    const words = (c.alts ?? []).flatMap((a) => a.label.toUpperCase().split(/\s+/));
+    for (const [tag, re] of [['4K', /^(4K|UHD|2160P|8K)$/], ['FHD', /^(FHD|1080P|POWER|MAX)$/], ['HD', /^(HD|720P)$/]] as const) if (words.some((w) => re.test(w))) return tag;
+    return '';
+  }
   const label = (c: Chan) => c.alts?.find((a) => a.chan.id === c.id)?.label ?? '';
   const idsFor = (action: string) => sel.flatMap((id) => {
     const r = rows.find((x) => x.id === id);
-    return r?.alts && (action === 'hide' || action === 'unhide' || action === 'move') ? r.alts.map((a) => a.chan.id) : [id];
+    return r?.alts && (action === 'hide' || action === 'unhide' || action === 'move' || action === 'unfavorite') ? r.alts.map((a) => a.chan.id) : [id];
   });
 
   let loading = $state(false);
@@ -99,6 +105,16 @@
     loading = true;
     error = '';
     try {
+      if (inFav && merged) {
+        const list = (await api.favMerged()).map(asRow);
+        if (mine !== ticket) return;
+        favCount = list.length;
+        const needle = q.trim().toLowerCase();
+        rows = needle ? list.filter((c) => c.name.toLowerCase().includes(needle)) : list;
+        next = null;
+        soff = null;
+        return;
+      }
       if (inFav) {
         const all = await api.favorites();
         if (mine !== ticket) return;
@@ -144,7 +160,7 @@
   onMount(async () => {
     try {
       groups = await api.groups();
-      favCount = (await api.favorites()).length;
+      favCount = merged ? (await api.favMerged()).length : (await api.favorites()).length;
     } catch (e) {
       error = String(e);
     }
@@ -184,7 +200,9 @@
     c.fav = v;
     favCount += v ? 1 : -1;
     try {
-      await api.setFavorite(c.id, v);
+      if (c.alts && !v) await api.bulk(c.alts.filter((a) => a.chan.fav || a.chan.id === c.id).map((a) => a.chan.id), 'unfavorite');
+      else await api.setFavorite(c.id, v);
+      if (c.alts) for (const a of c.alts) if (!v) a.chan.fav = false; else if (a.chan.id === c.id) a.chan.fav = true;
       if (inFav && !v) rows = rows.filter((x) => x.id !== c.id);
     } catch (e) {
       c.fav = !v;
@@ -277,13 +295,14 @@
   let orderSnap = $state<Chan[] | null>(null);
   function stage(next: Chan[]) { if (!orderSnap) orderSnap = [...rows]; rows = next; }
   function cancelOrder() { if (orderSnap) rows = orderSnap; orderSnap = null; }
+  const favIdOf = (c: Chan) => c.alts?.find((a) => a.chan.fav)?.chan.id ?? c.id;
   async function saveOrder() {
-    const ids = rows.map((c) => c.id);
+    const ids = rows.map((c) => (inFav ? favIdOf(c) : c.id));
     try { await (inFav ? api.reorder(ids) : api.reorderChannels(ids)); orderSnap = null; toast(t('ord.saved')); } catch (e) { toast(String(e)); }
   }
 
   // ---- order the selected channels as a block (My order inside a category, or Favorites)
-  const orderable = $derived(!merged && !q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
+  const orderable = $derived((!merged || inFav) && !q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
   let cpos = $state('');
   function orderSel(pos: number) {
     const idx = rows.map((r, i) => (isSel(r.id) ? i : -1)).filter((i) => i >= 0);
@@ -303,7 +322,7 @@
   }
 
   // ---- the user's own order of favourites
-  const canSort = $derived(!selecting && !merged && !q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
+  const canSort = $derived(!selecting && (!merged || inFav) && !q.trim() && (inFav || (mode === 'mine' && group !== '' && soff === null)));
 
   function place(from: number, to: number) {
     if (from === to || to < 0 || to >= rows.length) return;
@@ -441,7 +460,7 @@
                 {#if c.logo}<img src={c.logo} alt="" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
                 <b>{initials(c.name)}</b>
               </span>
-              <span class="nm"><b>{c.name}</b><span class="muted">{c.group}</span></span>
+              <span class="nm"><b>{c.name}{#if c.alts}{@const bt = bestTag(c)}{#if bt}<i class="qb">{bt}</i>{/if}{/if}</b><span class="muted">{c.group}{#if c.alts}{' · '}{c.alts.length} {t('mrg.qualities')}{/if}</span></span>
             </button>
             {#if c.alts}
               <span class="qwrap">
@@ -546,6 +565,7 @@
   .opts { overflow-y: auto; display: flex; flex-direction: column; }
   .opt { display: flex; justify-content: space-between; gap: 8px; padding: 9px 10px; border-radius: 8px; text-align: start; }
   .opt:hover { background: var(--surface-3); }
+  .qb { font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 6px; margin-inline-start: 8px; border-radius: 5px; background: color-mix(in srgb, var(--text) 16%, transparent); vertical-align: 2px; }
   .qwrap { position: relative; flex: none; }
   .qchip { display: inline-flex; gap: 4px; align-items: center; padding: 6px 12px; border-radius: 999px; background: var(--surface-3); font-size: 12px; font-weight: 600; max-width: 170px; white-space: nowrap; }
   .qchip:hover { background: var(--line-2); }

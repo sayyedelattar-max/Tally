@@ -581,6 +581,25 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// Favourites as channels: all qualities of a favourite folded into one entry, in the user's order.
+    /// Each entry comes with the id of the quality that was starred.
+    pub fn favorites_merged(&self) -> Result<Vec<(crate::quality::Merged, i64)>> {
+        let mut by_group: std::collections::HashMap<String, Vec<crate::quality::Merged>> = std::collections::HashMap::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for f in self.favorites()? {
+            if !by_group.contains_key(&f.group) {
+                let rows = self.channels_sorted(Some(&f.group), "provider", true, 0, 8000)?;
+                by_group.insert(f.group.clone(), crate::quality::merge(rows));
+            }
+            let Some(m) = by_group[&f.group].iter().find(|m| m.variants.iter().any(|v| v.channel.id == f.id)) else { continue };
+            if seen.insert(m.key.clone()) {
+                out.push((m.clone(), f.id));
+            }
+        }
+        Ok(out)
+    }
+
     // ----------------------------------------------------------------- guide
 
     /// What is on at `at`, and what follows it.
@@ -1029,6 +1048,17 @@ mod tests {
         assert_eq!(st.channels_sorted(Some("Mine"), "provider", false, 0, 10).unwrap().len(), 2);
         st.move_channels(&ids[..2], "").unwrap();
         assert!(st.groups().unwrap().iter().any(|(g, _)| g == "News"));
+        // favourites fold the qualities of a channel into one entry
+        let mut st2 = Store::open_memory().unwrap();
+        let ch2 = |n: &str| Channel { name: n.into(), group: "News".into(), url: format!("http://x/{n}"), ..Default::default() };
+        st2.import_channels(vec![ch2("BEIN 1 HQ 4M"), ch2("BEIN 1 SD 2M"), ch2("MBC 4")]).unwrap();
+        let all: Vec<i64> = st2.channels_sorted(None, "provider", true, 0, 10).unwrap().iter().map(|c| c.id).collect();
+        st2.set_favorites(&[all[1], all[0], all[2]], true).unwrap();
+        let fm = st2.favorites_merged().unwrap();
+        assert_eq!(fm.len(), 2);
+        assert_eq!(fm[0].0.name, "BEIN 1");
+        assert_eq!(fm[0].0.variants.len(), 2);
+        assert_eq!(fm[0].1, all[1]);
         // guide channels need programmes
         st.import_programmes(vec![Programme { channel: "a".into(), start: 0, stop: 100, title: "T".into(), desc: String::new() }]).unwrap();
         assert_eq!(st.guide_channels(false, None, 10, 50, 0, 10).unwrap().len(), 1);
