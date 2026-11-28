@@ -103,7 +103,7 @@ impl XtreamClient {
             ureq::Agent::config_builder()
                 .ip_family(family)
                 .user_agent(ua)
-                .timeout_connect(Some(Duration::from_secs(8)))
+                .timeout_connect(Some(Duration::from_secs(20)))
                 .timeout_recv_response(Some(Duration::from_secs(recv)))
                 .build()
                 .into()
