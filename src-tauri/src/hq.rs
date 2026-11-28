@@ -128,6 +128,13 @@ impl Hq {
         ] {
             let _ = mpv.command(&["keybind", key, &format!("script-message {msg}")]);
         }
+        // subtitles: C = next track, Shift+C = second track, X / Shift+X = move the timing
+        for (key, cmd) in [
+            ("c", "osd-auto cycle sub"), ("C", "osd-auto cycle secondary-sid"),
+            ("x", "osd-auto add sub-delay -0.1"), ("X", "osd-auto add sub-delay 0.1"),
+        ] {
+            let _ = mpv.command(&["keybind", key, cmd]);
+        }
         let session = Arc::new(Session { mpv: mpv.clone(), state: Mutex::new(State { items, index, retries: 0, fit: 0 }) });
         *self.session.lock().unwrap() = Some(session.clone());
         let (me, app, lib, proxy) = (self.clone(), app.clone(), lib.clone(), proxy.clone());
@@ -323,6 +330,15 @@ fn configure(m: &Mpv, o: &Options) -> Result<()> {
         ("demuxer-lavf-probesize", "1500000".into()),
         ("audio-channels", "auto-safe".into()),
         ("screenshot-directory", "~~desktop/".into()),
+        // subtitles: Arabic first, then English; a second track can be shown together with the first
+        ("sid", "auto".into()),
+        ("slang", "ara,ar,eng,en".into()),
+        ("sub-font", "Segoe UI".into()),
+        ("sub-font-size", "44".into()),
+        ("sub-border-size", "2.4".into()),
+        ("sub-shadow-offset", "1".into()),
+        ("sub-pos", "94".into()),
+        ("secondary-sub-visibility", "yes".into()),
     ];
     match o.quality.as_str() {
         "standard" => {
