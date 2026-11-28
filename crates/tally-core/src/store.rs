@@ -584,10 +584,16 @@ impl Store {
     /// Favourites as channels: all qualities of a favourite folded into one entry, in the user's order.
     /// Each entry comes with the id of the quality that was starred.
     pub fn favorites_merged(&self) -> Result<Vec<(crate::quality::Merged, i64)>> {
+        self.merged_for(self.favorites()?)
+    }
+
+    /// Fold the given channels (in order) into merged channels, one per channel, each paired with the
+    /// quality that was asked for. Every category of the same family is read, once per family.
+    pub fn merged_for(&self, chans: Vec<ChannelRow>) -> Result<Vec<(crate::quality::Merged, i64)>> {
         let mut by_group: std::collections::HashMap<String, Vec<crate::quality::Merged>> = std::collections::HashMap::new();
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
-        for f in self.favorites()? {
+        for f in chans {
             if !by_group.contains_key(&f.group) {
                 // every category of the same family (one per quality) is read together
                 let fam = crate::quality::family(&f.group).to_uppercase();

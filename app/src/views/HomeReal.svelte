@@ -5,6 +5,8 @@
   import { ui, t, go } from '../lib/store.svelte';
   import { api, expiry, type Chan, type HomeData, type PlaylistInfo, type TitleItem } from '../lib/backend';
   import { artFor } from '../lib/art';
+  import { asRow, bestTag } from '../lib/quality';
+  import { view } from '../lib/view.svelte';
 
   let data = $state<HomeData | null>(null);
   let info = $state<PlaylistInfo | null>(null);
@@ -32,8 +34,11 @@
   function playLive(list: Chan[], i: number) {
     ui.rplay = { list: [...list], index: i };
   }
-  const hero = $derived(data?.lastLive ?? data?.favorites[0] ?? null);
-  const heroList = $derived(data?.lastLive ? [data.lastLive, ...(data.recentLive ?? [])] : (data?.favorites ?? []));
+  // one entry per channel (qualities folded) unless the user turned merging off
+  const favs = $derived<Chan[]>(!data ? [] : view.lines && view.channels ? data.favoritesMerged.map(asRow) : data.favorites);
+  const recents = $derived<Chan[]>(!data ? [] : view.lines && view.channels ? data.recentMerged.map(asRow) : data.recentLive);
+  const hero = $derived(data?.lastLive ?? favs[0] ?? null);
+  const heroList = $derived(data?.lastLive ? [data.lastLive, ...recents] : favs);
 
   const noTitles = $derived(!!data && data.movieCount + data.seriesCount === 0);
 </script>
@@ -75,7 +80,7 @@
             {#if c.logo}<img src={c.logo} alt="" loading="lazy" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
             <b>{initials(c.name)}</b>
           </span>
-          <span class="cn">{c.name}</span>
+          <span class="cn">{c.name}{#if c.alts}{@const bt = bestTag(c)}{#if bt}<i class="qb">{bt}</i>{/if}{/if}</span>
         </button>
       {/each}
     </div>
@@ -98,9 +103,9 @@
 
 {#if data}
   {#if data.continueTitles.length}{@render posters(t('hm.continue'), data.continueTitles, null)}{/if}
-  {#if data.favorites.length}{@render chans(t('hm.favs'), data.favorites)}
+  {#if favs.length}{@render chans(t('hm.favs'), favs)}
   {:else}<p class="muted note">{t('hm.noFavs')}</p>{/if}
-  {#if data.recentLive.length}{@render chans(t('hm.recent'), data.recentLive)}{/if}
+  {#if recents.length}{@render chans(t('hm.recent'), recents)}{/if}
   {#if data.newMovies.length}{@render posters(t('hm.newMovies'), data.newMovies, 'movies')}{/if}
   {#if data.newSeries.length}{@render posters(t('hm.newSeries'), data.newSeries, 'series')}{/if}
   {#if noTitles}<p class="muted note">{t('hm.empty')}</p>{/if}
@@ -130,6 +135,7 @@
   .ch { width: 132px; display: flex; flex-direction: column; gap: 8px; text-align: start; border-radius: 12px; padding: 6px; }
     .cl { position: relative; width: 100%; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; display: grid; place-items: center; font-size: 22px; }
   .cl img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; padding: 8px; }
+  .qb { font-style: normal; font-size: 9px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 5px; margin-inline-start: 6px; border-radius: 4px; background: color-mix(in srgb, var(--text) 16%, transparent); vertical-align: 1px; }
   .cn, .pn { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pst { width: 150px; display: flex; flex-direction: column; gap: 8px; text-align: start; border-radius: 12px; padding: 6px; }
   .pimg { position: relative; width: 100%; aspect-ratio: 2 / 3; border-radius: 10px; overflow: hidden; background: var(--surface-2); display: grid; place-items: center; font-size: 40px; color: var(--muted); }

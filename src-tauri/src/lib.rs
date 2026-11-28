@@ -566,6 +566,8 @@ struct HomeDto {
     now_start: i64,
     recent_live: Vec<ChannelDto>,
     favorites: Vec<ChannelDto>,
+    recent_merged: Vec<MergedDto>,
+    favorites_merged: Vec<MergedDto>,
     continue_titles: Vec<TitleDto>,
     new_movies: Vec<TitleDto>,
     new_series: Vec<TitleDto>,
@@ -574,17 +576,28 @@ struct HomeDto {
     series_count: i64,
 }
 
+fn merged_dto(m: tally_core::quality::Merged, selected: i64) -> MergedDto {
+    MergedDto {
+        key: m.key,
+        name: m.name,
+        selected,
+        variants: m.variants.into_iter().map(|v| VariantDto { channel: v.channel.into(), label: v.label, score: v.score, hevc: v.hevc }).collect(),
+    }
+}
+
 /// Everything the Home launcher shows, in one call. Never downloads: empty shelves just stay empty.
 #[tauri::command]
 async fn home_data(lib: Lib<'_>, proxy: State<'_, Proxy>) -> std::result::Result<HomeDto, String> {
     let (lib, proxy) = (lib.inner().clone(), proxy.inner().clone());
     blocking(move || {
         let Some(s) = lib.active_store()? else {
-            return Ok(HomeDto { last_live: None, now_title: String::new(), next_title: String::new(), now_stop: 0, now_start: 0, recent_live: vec![], favorites: vec![], continue_titles: vec![], new_movies: vec![], new_series: vec![], live_count: 0, movie_count: 0, series_count: 0 });
+            return Ok(HomeDto { last_live: None, now_title: String::new(), next_title: String::new(), now_stop: 0, now_start: 0, recent_live: vec![], favorites: vec![], recent_merged: vec![], favorites_merged: vec![], continue_titles: vec![], new_movies: vec![], new_series: vec![], live_count: 0, movie_count: 0, series_count: 0 });
         };
         let mut recent_live: Vec<ChannelDto> = Vec::new();
+        let mut recent_ids: Vec<i64> = Vec::new();
         for r in s.recent_watched("live", 12)? {
             if let Ok(id) = r.parse::<i64>() {
+                recent_ids.push(id);
                 if let Some(c) = s.channel_by_id(id)? { recent_live.push(c.into()); }
             }
         }
@@ -609,6 +622,11 @@ async fn home_data(lib: Lib<'_>, proxy: State<'_, Proxy>) -> std::result::Result
         Ok(HomeDto {
             now_title, next_title, now_start, now_stop,
             last_live,
+            recent_merged: {
+                let rows: Vec<_> = recent_ids.iter().skip(1).filter_map(|id| s.channel_by_id(*id).ok().flatten()).collect();
+                s.merged_for(rows)?.into_iter().map(|(m, sel)| merged_dto(m, sel)).collect()
+            },
+            favorites_merged: s.favorites_merged()?.into_iter().take(14).map(|(m, sel)| merged_dto(m, sel)).collect(),
             recent_live: recent_live.into_iter().skip(1).collect(),
             favorites: s.favorites()?.into_iter().take(14).map(Into::into).collect(),
             continue_titles,
