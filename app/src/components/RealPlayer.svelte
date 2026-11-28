@@ -259,7 +259,7 @@
     {#if isVod && dur > 0}
       <div class="seekrow">
         <span class="mono tm">{clock(time)}</span>
-        <input type="range" min="0" max={dur} step="1" value={time} aria-label={t('player.seek')} oninput={(e) => { if (video) video.currentTime = +e.currentTarget.value; }} />
+        <input type="range" min="0" max={dur} step="1" value={time} style="--p:{dur ? Math.min(100, (time / dur) * 100) : 0}%" aria-label={t('player.seek')} oninput={(e) => { if (video) video.currentTime = +e.currentTarget.value; }} />
         <span class="mono tm">{clock(dur)}</span>
       </div>
     {/if}
@@ -292,26 +292,29 @@
   .fitb { width: auto; padding-inline: 14px; font-size: 13px; border-radius: 999px; }
   .qnow { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.16); white-space: nowrap; }
   .qwrap { position: relative; }
-  .qmenu { position: absolute; inset-inline-end: 0; bottom: calc(100% + 10px); min-width: 270px; max-height: 60vh; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; border-radius: 14px; background: rgba(28, 28, 30, 0.96); border: 1px solid rgba(255, 255, 255, 0.14); box-shadow: 0 20px 44px -10px rgb(0 0 0 / 0.8); }
+  .qmenu { position: absolute; inset-inline-end: 0; bottom: calc(100% + 10px); min-width: 270px; max-height: 60vh; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; border-radius: 14px; background: rgba(40, 40, 44, 0.78); backdrop-filter: blur(24px) saturate(1.4); border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 20px 44px -10px rgb(0 0 0 / 0.8); }
   .qmenu button { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px; color: #fff; font-size: 14px; text-align: start; }
   .qmenu button:hover { background: rgba(255, 255, 255, 0.12); }
   .qmenu button.cur { background: rgba(255, 255, 255, 0.2); font-weight: 600; }
   .qmenu small { opacity: 0.6; font-size: 11px; white-space: nowrap; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-  .top, .bottom { position: absolute; inset-inline: 0; display: flex; align-items: center; gap: 10px; padding: 18px 24px; background: rgba(0, 0, 0, 0.55); transition: opacity 0.2s; }
-  .top { top: 0; }
-  .bottom { bottom: 0; }
+  .top, .bottom { position: absolute; inset-inline: 0; display: flex; align-items: center; gap: 10px; padding: 22px 28px; transition: opacity 0.25s; }
+  .top { top: 0; padding-block-end: 56px; background: linear-gradient(rgba(0, 0, 0, 0.72), transparent); }
+  .bottom { bottom: 0; padding-block-start: 64px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.78)); }
   .rp.idle .top, .rp.idle .bottom { opacity: 0; pointer-events: none; }
   .who { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
   .who b { font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who .muted { font-size: 13px; color: rgba(255, 255, 255, 0.65); }
   .rb { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; color: #fff; }
   .rb:hover { background: rgba(255, 255, 255, 0.16); }
-  .rb.big { width: 56px; height: 56px; background: rgba(255, 255, 255, 0.14); }
+  .rb.big { width: 58px; height: 58px; background: rgba(255, 255, 255, 0.2); backdrop-filter: blur(12px); }
   .sp { flex: 1; }
   .bottom { flex-wrap: wrap; }
   .seekrow { flex: 1 0 100%; display: flex; align-items: center; gap: 12px; }
-  .seekrow input { flex: 1; min-width: 0; accent-color: var(--accent, #fff); }
+  .seekrow input { flex: 1; min-width: 0; -webkit-appearance: none; appearance: none; height: 18px; background: transparent; cursor: pointer; }
+  .seekrow input::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: linear-gradient(to right, #fff var(--p, 0%), rgba(255, 255, 255, 0.28) var(--p, 0%)); }
+  .seekrow input::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; margin-top: -4px; border-radius: 50%; background: #fff; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5); transform: scale(0); transition: transform 0.12s; }
+  .seekrow input:hover::-webkit-slider-thumb, .seekrow input:focus-visible::-webkit-slider-thumb { transform: scale(1); }
   .tm { font-size: 12px; min-width: 44px; text-align: center; color: rgba(255, 255, 255, 0.8); }
   .mid { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; max-width: min(520px, 90vw); display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 24px; }
   .mid.err { background: rgba(0, 0, 0, 0.78); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 14px; }
