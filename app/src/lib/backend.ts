@@ -16,7 +16,7 @@ export type PlaylistInfo = {
   updatedAt: number;
 };
 export type Registry = { active: string | null; items: PlaylistInfo[] };
-export type Group = { name: string; count: number; hidden: boolean };
+export type Group = { name: string; count: number; hidden: boolean; family?: string | null };
 export type VodRef = { kind: 'movie' | 'episode'; id: string; ext: string };
 export type Alt = { chan: Chan; label: string; score: number; hevc: boolean };
 export type Chan = { alts?: Alt[]; mkey?: string; id: number; tvgId: string; name: string; group: string; logo: string; number: number | null; fav: boolean; hidden?: boolean; vod?: VodRef };
@@ -58,7 +58,7 @@ export const api = {
   titles: (a: { kind: string; group: string | null; query: string | null; offset: number; limit: number }) => call<TitleItem[]>('title_page', a),
   series: (id: string) => call<SeriesInfo>('series_detail', { id }),
   playTitle: (v: VodRef) => call<{ url: string }>('play_title', { kind: v.kind, id: v.id, ext: v.ext }),
-  merged: (group: string | null, query: string | null, showHidden: boolean) => call<{ key: string; name: string; selected: number; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }[]>('live_channels_merged', { group, query, showHidden }),
+  merged: (group: string | null, query: string | null, showHidden: boolean, groups: string[] | null = null, across = true, lines = true) => call<{ key: string; name: string; selected: number; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }[]>('live_channels_merged', { group, groups, query, showHidden, across, lines }),
   favMerged: () => call<{ key: string; name: string; selected: number; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }[]>('live_favorites_merged'),
   bulk: (ids: number[], action: 'favorite' | 'unfavorite' | 'hide' | 'unhide' | 'move', group?: string) => call<void>('bulk_channels', { ids, action, group: group ?? null }),
   guideStatus: () => call<{ count: number; newest: number }>('guide_status'),

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { view } from '../lib/view.svelte';
   import { onMount, tick } from 'svelte';
   import Icon from '../components/Icon.svelte';
   import { ui, t, toast, go } from '../lib/store.svelte';
@@ -57,9 +58,25 @@
   }
 
   // ---- one entry per channel, with a quality to choose (display only; the provider's list is untouched)
-  let merged = $state((() => { try { return localStorage.getItem('elara.merge') !== '0'; } catch { return true; } })());
+  let merged = $state(view.channels);
   let qmenu = $state<number | null>(null);
-  function setMerged(v: boolean) { merged = v; try { localStorage.setItem('elara.merge', v ? '1' : '0'); } catch {} }
+  // Providers often make one category per quality ("BEIN SPORT HQ 4M", "BEIN SPORT LOW 1M"…).
+  // In the channel view those fold into one category named after the family, listing each channel once.
+  type GEntry = Group & { members?: string[] };
+  const gFolded = $derived.by<GEntry[]>(() => {
+    const out: GEntry[] = [];
+    const at = new Map<string, number>();
+    for (const g of groups) {
+      if (!g.family) { out.push(g); continue; }
+      const i = at.get(g.family.toUpperCase());
+      if (i === undefined) { at.set(g.family.toUpperCase(), out.length); out.push({ ...g, name: g.family, members: [g.name] }); }
+      else { const e = out[i]; e.members!.push(g.name); e.count = Math.max(e.count, g.count); e.hidden = e.hidden && g.hidden; }
+    }
+    return out;
+  });
+  const gList = $derived<GEntry[]>(merged && view.fold && view.lines && !editGroups ? gFolded : groups);
+  const membersOf = (name: string) => (merged && view.fold && view.lines && !editGroups ? gFolded.find((g) => g.name === name)?.members ?? null : null);
+  function setMerged(v: boolean) { merged = v; if (!v && group && group !== FAV && !groups.some((g) => g.name === group)) group = ''; }
   function asRow(m: { key: string; name: string; selected?: number; variants: { channel: Chan; label: string; score: number; hevc: boolean }[] }): Chan {
     const alts: Alt[] = m.variants.map((v) => ({ chan: v.channel, label: v.label, score: v.score, hevc: v.hevc }));
     const want = qGet(m.key);
@@ -105,7 +122,7 @@
     loading = true;
     error = '';
     try {
-      if (inFav && merged) {
+      if (inFav && merged && view.lines) {
         const list = (await api.favMerged()).map(asRow);
         if (mine !== ticket) return;
         favCount = list.length;
@@ -126,7 +143,7 @@
         return;
       }
       if (merged) {
-        const list = await api.merged(group || null, q.trim() || null, showHidden);
+        const list = await api.merged(group || null, q.trim() || null, showHidden, membersOf(group), view.fold, view.lines);
         if (mine !== ticket) return;
         let out = list.map(asRow);
         if (mode === 'az') out = [...out].sort((a, b) => a.name.localeCompare(b.name));
@@ -160,7 +177,7 @@
   onMount(async () => {
     try {
       groups = await api.groups();
-      favCount = merged ? (await api.favMerged()).length : (await api.favorites()).length;
+      favCount = merged && view.lines ? (await api.favMerged()).length : (await api.favorites()).length;
     } catch (e) {
       error = String(e);
     }
@@ -176,6 +193,8 @@
     mode;
     showHidden;
     merged;
+    view.fold;
+    view.lines;
     if (first) {
       first = false;
       return;
@@ -389,7 +408,7 @@
       {/if}
       <button class="g" class:on={inFav} onclick={() => (group = FAV)}><span class="gn"><Icon name="star" size={15} filled /> {t('fav.title')}</span><span class="mono muted">{favCount}</span></button>
       <button class="g" class:on={group === ''} onclick={() => (group = '')}><span>{t('common.all')}</span><span class="mono muted">{total}</span></button>
-      {#each groups as g, gi (g.name)}
+      {#each gList as g, gi (g.name)}
         <div class="grow" class:dim={g.hidden} class:gover={gOver === g.name && gDrag !== g.name} class:gdrag={gDrag === g.name}
           draggable={editGroups}
           role="group"

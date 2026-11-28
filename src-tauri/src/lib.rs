@@ -82,6 +82,8 @@ struct GroupDto {
     name: String,
     count: i64,
     hidden: bool,
+    /// Set when this category is one quality of a family ("BEIN SPORT HQ 4M" → "BEIN SPORT").
+    family: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -173,7 +175,21 @@ async fn playlist_activate(lib: Lib<'_>, id: String) -> std::result::Result<(), 
 async fn live_groups(lib: Lib<'_>, show_hidden: Option<bool>) -> std::result::Result<Vec<GroupDto>, String> {
     let lib = lib.inner().clone();
     blocking(move || match lib.active_store()? {
-        Some(s) => Ok(s.groups_ex(show_hidden.unwrap_or(false))?.into_iter().map(|(name, count, hidden)| GroupDto { name, count, hidden }).collect()),
+        Some(s) => {
+            let list = s.groups_ex(show_hidden.unwrap_or(false))?;
+            let mut per: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for (name, _, _) in &list {
+                *per.entry(tally_core::quality::family(name).to_uppercase()).or_default() += 1;
+            }
+            Ok(list
+                .into_iter()
+                .map(|(name, count, hidden)| {
+                    let f = tally_core::quality::family(&name);
+                    let family = (per.get(&f.to_uppercase()).copied().unwrap_or(0) >= 2).then_some(f);
+                    GroupDto { name, count, hidden, family }
+                })
+                .collect())
+        }
         None => Ok(Vec::new()),
     })
     .await
@@ -243,15 +259,25 @@ struct MergedDto {
 
 /// One entry per channel, with its qualities folded in. Nothing is stored: the provider's list is untouched.
 #[tauri::command]
-async fn live_channels_merged(lib: Lib<'_>, group: Option<String>, query: Option<String>, show_hidden: bool) -> std::result::Result<Vec<MergedDto>, String> {
+async fn live_channels_merged(lib: Lib<'_>, group: Option<String>, groups: Option<Vec<String>>, query: Option<String>, show_hidden: bool, across: Option<bool>, lines: Option<bool>) -> std::result::Result<Vec<MergedDto>, String> {
     let lib = lib.inner().clone();
     blocking(move || {
         let Some(store) = lib.active_store()? else { return Ok(Vec::new()) };
-        let mut rows = store.channels_sorted(group.as_deref().filter(|g| !g.is_empty()), "provider", show_hidden, 0, 8000)?;
+        let mut rows = match groups.filter(|g| !g.is_empty()) {
+            // a family: every quality category is read and folded together
+            Some(list) => {
+                let mut all = Vec::new();
+                for g in &list {
+                    all.extend(store.channels_sorted(Some(g.as_str()), "provider", show_hidden, 0, 8000)?);
+                }
+                all
+            }
+            None => store.channels_sorted(group.as_deref().filter(|g| !g.is_empty()), "provider", show_hidden, 0, 8000)?,
+        };
         if let Some(q) = query.as_deref().map(|q| q.trim().to_lowercase()).filter(|q| !q.is_empty()) {
             rows.retain(|c| c.name.to_lowercase().contains(&q));
         }
-        Ok(tally_core::quality::merge(rows)
+        Ok(tally_core::quality::merge_with(rows, across.unwrap_or(true), lines.unwrap_or(true))
             .into_iter()
             .map(|m| MergedDto {
                 key: m.key,

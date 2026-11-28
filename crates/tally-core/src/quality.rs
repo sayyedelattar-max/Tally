@@ -87,14 +87,50 @@ pub fn split(name: &str) -> (String, String, f64, bool) {
     (base, if label.is_empty() { "Standard".into() } else { label }, score, hevc)
 }
 
+/// The category name without its trailing quality words, e.g. `BEIN SPORT H265 FHD 4M` → `BEIN SPORT`.
+/// Providers often make one category per quality; categories with the same family belong together.
+pub fn family(group: &str) -> String {
+    let (base, _, _, _) = split(group.trim());
+    base
+}
+
+/// Quality words found on the category name (empty when there are none).
+fn group_tier(group: &str) -> Option<(String, f64, bool)> {
+    let (base, label, score, hevc) = split(group.trim());
+    if base == group.trim() || label == "Standard" {
+        None
+    } else {
+        Some((label, score, hevc))
+    }
+}
+
 /// Group channels of the same category that differ only by quality, keeping the provider's order
 /// (a group appears where its first member did). Lines that have no twin come back as they were.
 pub fn merge(rows: Vec<ChannelRow>) -> Vec<Merged> {
+    merge_with(rows, true, true)
+}
+
+/// `across`: fold categories that are one quality of the same family. `lines`: merge repeated
+/// qualities of a channel at all (off = every line stays its own entry).
+pub fn merge_with(rows: Vec<ChannelRow>, across: bool, lines: bool) -> Vec<Merged> {
+    if !lines {
+        return rows
+            .into_iter()
+            .map(|ch| Merged { key: format!("id:{}", ch.id), name: ch.name.clone(), variants: vec![Variant { label: "Standard".into(), score: 0.0, hevc: false, channel: ch }] })
+            .collect();
+    }
     let mut out: Vec<Merged> = Vec::new();
     let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for ch in rows {
-        let (base, label, score, hevc) = split(&ch.name);
-        let key = format!("{}|{}", ch.group, base.to_uppercase());
+        let (base, mut label, mut score, mut hevc) = split(&ch.name);
+        // the quality may live on the category ("BEIN SPORT FHD 4M") instead of on the channel
+        if label == "Standard" {
+            if let Some((l, s, h)) = group_tier(&ch.group) {
+                (label, score, hevc) = (l, s, h);
+            }
+        }
+        let cat = if across { family(&ch.group) } else { ch.group.clone() };
+        let key = format!("{}|{}", cat.to_uppercase(), base.to_uppercase());
         let v = Variant { channel: ch, label, score, hevc };
         match index.get(&key) {
             Some(&i) => out[i].variants.push(v),
@@ -151,6 +187,21 @@ mod tests {
         let mbc = m.iter().find(|x| x.name == "MBC 4").unwrap();
         assert_eq!(mbc.variants.len(), 2);
         assert!(mbc.variants.iter().any(|v| v.label == "Standard"));
+    }
+
+    #[test]
+    fn one_category_per_quality_still_becomes_one_channel() {
+        let m = merge(vec![
+            ch(1, "BEIN SPORT 1 HQ 4M", "BEIN SPORT HQ 4M"), ch(2, "BEIN SPORT 2 HQ 4M", "BEIN SPORT HQ 4M"),
+            ch(3, "BEIN SPORT 1 LOW 1M", "BEIN SPORT LOW 1M"), ch(4, "BEIN SPORT 2 LOW 1M", "BEIN SPORT LOW 1M"),
+            ch(5, "BEIN SPORT 1", "BEIN SPORT H265 FHD 4M"),
+        ]);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].name, "BEIN SPORT 1");
+        assert_eq!(m[0].variants.len(), 3);
+        assert_eq!(m[0].variants[0].label, "H265 FHD 4M"); // quality taken from the category
+        assert_eq!(family("BEIN SPORT PURE 4/8M"), "BEIN SPORT");
+        assert_eq!(family("ARABIC SPORTS"), "ARABIC SPORTS");
     }
 
     #[test]

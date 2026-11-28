@@ -589,7 +589,14 @@ impl Store {
         let mut out = Vec::new();
         for f in self.favorites()? {
             if !by_group.contains_key(&f.group) {
-                let rows = self.channels_sorted(Some(&f.group), "provider", true, 0, 8000)?;
+                // every category of the same family (one per quality) is read together
+                let fam = crate::quality::family(&f.group).to_uppercase();
+                let mut rows = Vec::new();
+                for (g, _, _) in self.groups_ex(true)? {
+                    if crate::quality::family(&g).to_uppercase() == fam {
+                        rows.extend(self.channels_sorted(Some(&g), "provider", true, 0, 8000)?);
+                    }
+                }
                 by_group.insert(f.group.clone(), crate::quality::merge(rows));
             }
             let Some(m) = by_group[&f.group].iter().find(|m| m.variants.iter().any(|v| v.channel.id == f.id)) else { continue };

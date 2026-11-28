@@ -6,6 +6,7 @@
   import { api, inApp, expiry } from '../lib/backend';
   import { liveCategories, movieCategories, playlists, seriesCategories, daysLeft } from '../lib/mock';
   import type { Accent } from '../lib/types';
+  import { view, saveView } from '../lib/view.svelte';
 
   const pl = $derived(playlists.find((p) => p.id === ui.activePlaylist)!);
   const left = $derived(daysLeft(pl.expires));
@@ -133,6 +134,28 @@
         {#each ['small', 'medium', 'large'] as s}
           <button class:on={ui.settings.subSize === s} onclick={() => (ui.settings.subSize = s)}>{t('set.size.' + s)}</button>
         {/each}
+      </div>
+    </SettingRow>
+  </section>
+
+  <section>
+    <h2 class="display">{t('set.liveView')}</h2>
+    <SettingRow label={t('set.defView')} desc={t('set.defViewDesc')}>
+      <div class="seg" role="group" aria-label={t('set.defView')}>
+        <button class:on={view.channels} onclick={() => { view.channels = true; saveView(); }}>{t('mrg.channels')}</button>
+        <button class:on={!view.channels} onclick={() => { view.channels = false; saveView(); }}>{t('mrg.provider')}</button>
+      </div>
+    </SettingRow>
+    <SettingRow label={t('set.foldGroups')} desc={t('set.foldGroupsDesc')}>
+      <div class="seg" role="group" aria-label={t('set.foldGroups')}>
+        <button class:on={view.fold} onclick={() => { view.fold = true; saveView(); }}>{t('common.on')}</button>
+        <button class:on={!view.fold} onclick={() => { view.fold = false; saveView(); }}>{t('common.off')}</button>
+      </div>
+    </SettingRow>
+    <SettingRow label={t('set.mergeLines')} desc={t('set.mergeLinesDesc')}>
+      <div class="seg" role="group" aria-label={t('set.mergeLines')}>
+        <button class:on={view.lines} onclick={() => { view.lines = true; saveView(); }}>{t('common.on')}</button>
+        <button class:on={!view.lines} onclick={() => { view.lines = false; saveView(); }}>{t('common.off')}</button>
       </div>
     </SettingRow>
   </section>

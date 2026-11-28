@@ -91,7 +91,10 @@ const en: Dict = {
   'toast.cacheCleared': 'Cache cleared', 'toast.listAdded': 'Added to My list', 'toast.listRemoved': 'Removed from My list',
   'toast.moviesCleared': 'Movie watch list cleared', 'toast.pinNote': 'PIN setup comes with the real app',
   'toast.plNote': 'Not available in the prototype', 'toast.recCancelled': 'Recording cancelled', 'toast.recScheduled': 'Recording scheduled',
-  'toast.recStarted': 'Recording started', 'toast.recStopped': 'Recording stopped', 'toast.refreshed': 'List refreshed', 'toast.updatedPl': 'Your provider list was updated',
+  'toast.recStarted': 'Recording started', 'toast.recStopped': 'Recording stopped', 'toast.refreshed': 'List refreshed',
+  'set.liveView': 'Live TV view', 'set.defView': 'Default view', 'set.defViewDesc': 'Channels shows each channel once with a quality to choose. Provider list shows exactly what your provider sent.',
+  'set.foldGroups': 'Group quality categories', 'set.foldGroupsDesc': 'When a provider makes one category per quality (BEIN SPORT HQ, BEIN SPORT LOW…), show them as one category.',
+  'set.mergeLines': 'Merge repeated qualities', 'set.mergeLinesDesc': 'Show one entry per channel and pick the quality while watching. Off keeps every line separate.', 'toast.updatedPl': 'Your provider list was updated',
   'toast.remOff': 'Reminder removed', 'toast.remOn': 'Reminder set', 'toast.seriesCleared': 'Series watch list cleared', 'toast.switched': 'Playlist switched',
 };
 
@@ -186,7 +189,10 @@ const ar: Dict = {
   'toast.cacheCleared': 'تم مسح الذاكرة المؤقتة', 'toast.listAdded': 'أُضيف إلى قائمتي', 'toast.listRemoved': 'أُزيل من قائمتي',
   'toast.moviesCleared': 'تم مسح قائمة الأفلام', 'toast.pinNote': 'إعداد PIN يأتي مع التطبيق الفعلي',
   'toast.plNote': 'غير متاح في النموذج التجريبي', 'toast.recCancelled': 'أُلغي التسجيل', 'toast.recScheduled': 'تمت جدولة التسجيل',
-  'toast.recStarted': 'بدأ التسجيل', 'toast.recStopped': 'توقف التسجيل', 'toast.refreshed': 'تم تحديث القائمة', 'toast.updatedPl': 'تم تحديث قائمة المزود تلقائيًا',
+  'toast.recStarted': 'بدأ التسجيل', 'toast.recStopped': 'توقف التسجيل', 'toast.refreshed': 'تم تحديث القائمة',
+  'set.liveView': 'عرض البث المباشر', 'set.defView': 'العرض الافتراضي', 'set.defViewDesc': 'قنوات: كل قناة مرة واحدة مع اختيار الجودة. قائمة المزود: كما أرسلها المزود بالضبط.',
+  'set.foldGroups': 'تجميع مجموعات الجودات', 'set.foldGroupsDesc': 'عندما يجعل المزود لكل جودة مجموعة (BEIN SPORT HQ وBEIN SPORT LOW…) تظهر كمجموعة واحدة.',
+  'set.mergeLines': 'دمج الجودات المكررة', 'set.mergeLinesDesc': 'عرض قناة واحدة واختيار الجودة أثناء المشاهدة. عند الإيقاف يبقى كل سطر منفصلًا.', 'toast.updatedPl': 'تم تحديث قائمة المزود تلقائيًا',
   'toast.remOff': 'أُزيل التذكير', 'toast.remOn': 'تم ضبط التذكير', 'toast.seriesCleared': 'تم مسح قائمة المسلسلات', 'toast.switched': 'تم تبديل القائمة',
 };
 
