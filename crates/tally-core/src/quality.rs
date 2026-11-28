@@ -87,6 +87,68 @@ pub fn split(name: &str) -> (String, String, f64, bool) {
     (base, if label.is_empty() { "Standard".into() } else { label }, score, hevc)
 }
 
+/// Tokens of a base name, upper-cased, with quality letters stuck to a number dropped:
+/// `Bein Movies HD1` and `BEIN MOVIES 1` both give `BEIN MOVIES 1`; `STC TV 1HD` gives `STC TV 1`.
+fn canon(base: &str) -> Vec<String> {
+    base.split_whitespace()
+        .map(|t| {
+            let u = t.to_uppercase();
+            let digits: String = u.chars().filter(|c| c.is_ascii_digit()).collect();
+            let letters: String = u.chars().filter(|c| !c.is_ascii_digit()).collect();
+            if !digits.is_empty() && !letters.is_empty() && (tier(&letters).is_some() || is_codec(&letters)) {
+                digits
+            } else {
+                u
+            }
+        })
+        .collect()
+}
+
+/// `BEIN SPORT 3` → (`BEIN SPORT`, 3): the channel's family and its number, when it has one.
+fn series_of(base: &str) -> Option<(String, u32)> {
+    let toks = canon(base);
+    let i = toks.iter().rposition(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))?;
+    let n: u32 = toks[i].parse().ok()?;
+    let rest: Vec<&str> = toks.iter().enumerate().filter(|(j, t)| *j != i && !is_quality(t)).map(|(_, t)| t.as_str()).collect();
+    if rest.is_empty() {
+        return None;
+    }
+    Some((rest.join(" "), n))
+}
+
+/// Put numbered channels of one family next to each other in numeric order (BEIN SPORT 1, 2, 3 …),
+/// the family sitting where its first member was. Everything else keeps its place.
+fn cluster(list: Vec<Merged>) -> Vec<Merged> {
+    let info: Vec<Option<(String, u32)>> = list.iter().map(|m| series_of(&split(&m.variants[0].channel.name).0)).collect();
+    let mut count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (s, _) in info.iter().flatten() {
+        *count.entry(s.as_str()).or_default() += 1;
+    }
+    let mut taken = vec![false; list.len()];
+    let mut order: Vec<usize> = Vec::with_capacity(list.len());
+    for i in 0..list.len() {
+        if taken[i] {
+            continue;
+        }
+        match &info[i] {
+            Some((s, _)) if count[s.as_str()] >= 2 => {
+                let mut members: Vec<usize> = (i..list.len()).filter(|&j| !taken[j] && info[j].as_ref().is_some_and(|x| x.0 == *s)).collect();
+                members.sort_by_key(|&j| (info[j].as_ref().map(|x| x.1).unwrap_or(0), j));
+                for j in members {
+                    taken[j] = true;
+                    order.push(j);
+                }
+            }
+            _ => {
+                taken[i] = true;
+                order.push(i);
+            }
+        }
+    }
+    let mut slots: Vec<Option<Merged>> = list.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
+}
+
 /// The category name without its trailing quality words, e.g. `BEIN SPORT H265 FHD 4M` → `BEIN SPORT`.
 /// Providers often make one category per quality; categories with the same family belong together.
 pub fn family(group: &str) -> String {
@@ -130,7 +192,7 @@ pub fn merge_with(rows: Vec<ChannelRow>, across: bool, lines: bool) -> Vec<Merge
             }
         }
         let cat = if across { family(&ch.group) } else { ch.group.clone() };
-        let key = format!("{}|{}", cat.to_uppercase(), base.to_uppercase());
+        let key = format!("{}|{}", cat.to_uppercase(), canon(&base).join(" "));
         let v = Variant { channel: ch, label, score, hevc };
         match index.get(&key) {
             Some(&i) => out[i].variants.push(v),
@@ -147,7 +209,7 @@ pub fn merge_with(rows: Vec<ChannelRow>, across: bool, lines: bool) -> Vec<Merge
             m.variants.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         }
     }
-    out
+    cluster(out)
 }
 
 #[cfg(test)]
@@ -202,6 +264,21 @@ mod tests {
         assert_eq!(m[0].variants[0].label, "H265 FHD 4M"); // quality taken from the category
         assert_eq!(family("BEIN SPORT PURE 4/8M"), "BEIN SPORT");
         assert_eq!(family("ARABIC SPORTS"), "ARABIC SPORTS");
+    }
+
+    #[test]
+    fn numbered_channels_of_a_family_sit_together_in_order() {
+        let m = merge(vec![
+            ch(1, "STATUS", "A"), ch(2, "BEIN SPORT 3 HQ 4M", "BEIN SPORT HQ 4M"), ch(3, "NOVA NEWS", "A"), ch(4, "BEIN SPORT 1 HQ 4M", "BEIN SPORT HQ 4M"),
+            ch(5, "ON SPORT", "C"), ch(6, "BEIN SPORT 2 HQ 4M", "BEIN SPORT HQ 4M"), ch(7, "Bein Movies HD1", "BEIN MOVIES HD"), ch(8, "beIN MOVIES 1 4K", "BEIN MOVIES 4K H265"),
+            ch(9, "BEIN SPORT 1 LOW 1M", "BEIN SPORT LOW 1M"),
+        ]);
+        let names: Vec<_> = m.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(&names[..5], ["STATUS", "BEIN SPORT 1", "BEIN SPORT 2 HQ 4M", "BEIN SPORT 3 HQ 4M", "NOVA NEWS"]);
+        assert_eq!(m[1].variants.len(), 2); // 1 HQ + 1 LOW
+        let movies: Vec<_> = m.iter().filter(|x| x.name.to_uppercase().contains("MOVIES")).collect();
+        assert_eq!(movies.len(), 1); // HD1 and "1 4K" are the same channel
+        assert_eq!(movies[0].variants.len(), 2);
     }
 
     #[test]
